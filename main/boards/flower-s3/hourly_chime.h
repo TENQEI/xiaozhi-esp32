@@ -2,14 +2,17 @@
 #define FLOWER_HOURLY_CHIME_H_
 
 #include "chime_schedule.h"
+#include "greeting_time_settings.h"
 
 namespace flower {
 
 class HourlyChime {
 public:
+    explicit HourlyChime(GreetingTimeSettings& times) : times_(times) {}
     void Tick();
 
 private:
+    GreetingTimeSettings& times_;
     bool loaded_ = false;
     ChimeConfig config_;
     ChimeSchedule schedule_;

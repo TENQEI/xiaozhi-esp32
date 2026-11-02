@@ -14,6 +14,8 @@ struct ChimeConfig {
     int quiet_end = 8;
     bool good_morning = false;
     bool good_night = false;
+    int quiet_start_minute = 0;
+    int quiet_end_minute = 0;
 };
 
 inline int ChimeIndex(int hour, int count) {
@@ -50,27 +52,33 @@ public:
             return -1;
         }
         const int64_t hour_key = static_cast<int64_t>(now) / 3600;
+        const int64_t minute_key = static_cast<int64_t>(now) / 60;
         const auto previous = previous_;
         previous_ = now;
         const bool new_hour = hour_key > latest_hour_;
+        const bool new_minute = minute_key > latest_minute_;
         latest_hour_ = std::max(latest_hour_, hour_key);
+        latest_minute_ = std::max(latest_minute_, minute_key);
         // Never catch up at boot, after a clock jump, or following a busy hour.
-        if (!new_hour || previous == 0 || now <= previous || now - previous > 5 || now % 3600 > 5 ||
+        if (!new_minute || previous == 0 || now <= previous || now - previous > 5 || now % 60 > 5 ||
             !idle || !config.enabled) {
             return -1;
         }
         const int hour = static_cast<int>(hour_key % 24);
+        const int minute = static_cast<int>(minute_key % 1440);
+        const int start = config.quiet_start * 60 + config.quiet_start_minute;
+        const int end = config.quiet_end * 60 + config.quiet_end_minute;
         // Boundary greetings take precedence over hourly clips, including the
         // good-night clip at the first instant of the quiet window.
-        if (config.quiet_start != config.quiet_end) {
-            if (hour == config.quiet_start && config.good_night) {
+        if (start != end) {
+            if (minute == start && config.good_night) {
                 return kGoodNight;
             }
-            if (hour == config.quiet_end && config.good_morning) {
+            if (minute == end && config.good_morning) {
                 return kGoodMorning;
             }
         }
-        if (IsQuietHour(hour, config.quiet_start, config.quiet_end)) {
+        if (!new_hour || now % 3600 > 5 || IsQuietHour(minute, start, end)) {
             return -1;
         }
         return ChimeIndex(hour, config.count);
@@ -79,6 +87,7 @@ public:
 private:
     std::time_t previous_ = 0;
     int64_t latest_hour_ = -1;
+    int64_t latest_minute_ = -1;
 };
 
 }  // namespace flower

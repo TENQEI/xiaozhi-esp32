@@ -5,6 +5,7 @@
 #include "hourly_chime.h"
 #include "led/gpio_led.h"
 #include "random_phrase.h"
+#include "time_config_web.h"
 #include "wifi_board.h"
 
 namespace {
@@ -12,8 +13,10 @@ namespace {
 class FlowerS3Board : public WifiBoard {
 private:
     Button boot_button_{BOOT_BUTTON_GPIO, false, 3000};
-    flower::HourlyChime hourly_chime_;
+    flower::GreetingTimeSettings greeting_times_;
+    flower::HourlyChime hourly_chime_{greeting_times_};
     flower::RandomPhrasePlayer random_phrases_;
+    flower::TimeConfigWeb time_config_web_{greeting_times_};
 
     class FlowerAudioCodec : public NoAudioCodecSimplex {
     public:
@@ -47,6 +50,21 @@ public:
     }
 
     void OnClockTick() override { hourly_chime_.Tick(); }
+
+    void SetNetworkEventCallback(NetworkEventCallback callback) override {
+        WifiBoard::SetNetworkEventCallback(
+            [this, callback = std::move(callback)](NetworkEvent event, const std::string& data) {
+                if (event == NetworkEvent::Connected) {
+                    time_config_web_.SetConnected(true);
+                } else if (event == NetworkEvent::Disconnected ||
+                           event == NetworkEvent::WifiConfigModeEnter) {
+                    time_config_web_.SetConnected(false);
+                }
+                if (callback) {
+                    callback(event, data);
+                }
+            });
+    }
 
     AudioCodec* GetAudioCodec() override {
         static FlowerAudioCodec codec;

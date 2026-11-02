@@ -52,6 +52,7 @@ void HourlyChime::LoadConfig() {
     config_ = {count,       (count > 0 || has_morning || has_night) && cJSON_IsTrue(enabled),
                start,       end,
                has_morning, has_night};
+    times_.SetDefaults({end * 60, start * 60});
     ESP_LOGI(kTag, "Chimes: %d files, enabled=%d, quiet=%02d:00-%02d:00", count, config_.enabled,
              start, end);
 }
@@ -73,6 +74,11 @@ void HourlyChime::Tick() {
     if (!loaded_ && idle) {
         LoadConfig();
     }
+    const auto times = times_.Get();
+    config_.quiet_start = times.night / 60;
+    config_.quiet_start_minute = times.night % 60;
+    config_.quiet_end = times.morning / 60;
+    config_.quiet_end_minute = times.morning % 60;
     const int index = schedule_.Poll(std::time(nullptr), config_, idle);
     if (index >= 0) {
         Play(index);

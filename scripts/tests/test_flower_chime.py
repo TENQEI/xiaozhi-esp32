@@ -300,6 +300,45 @@ class FlowerScheduleTest(unittest.TestCase):
                 ChimeSchedule no_morning;
                 no_morning.Poll(day + 4 * 3600 - 1, c, true);
                 assert(no_morning.Poll(day + 4 * 3600, c, true) == 4);
+                // Web overrides have minute precision. Hourly clips still play
+                // only on the hour; greeting boundaries use the same quiet window.
+                c = {24, true, 20, 8, true, true, 15, 30};
+                for (int minute : {8 * 60, 8 * 60 + 30, 9 * 60, 20 * 60,
+                                   20 * 60 + 15, 21 * 60}) {
+                    ChimeSchedule precise;
+                    precise.Poll(day + minute * 60 - 1, c, true);
+                    int expected = minute == 8 * 60 + 30 ? ChimeSchedule::kGoodMorning :
+                                   minute == 20 * 60 + 15 ? ChimeSchedule::kGoodNight :
+                                   minute == 9 * 60 ? 9 : minute == 20 * 60 ? 20 : -1;
+                    assert(precise.Poll(day + minute * 60 + 2, c, true) == expected);
+                    assert(precise.Poll(day + minute * 60 + 3, c, true) == -1);
+                }
+                // A quiet window can start and end within the same hour.
+                c = {24, true, 8, 8, true, true, 10, 30};
+                ChimeSchedule short_window;
+                short_window.Poll(day + 8 * 3600 + 10 * 60 - 1, c, true);
+                assert(short_window.Poll(day + 8 * 3600 + 10 * 60, c, true) ==
+                       ChimeSchedule::kGoodNight);
+                short_window.Poll(day + 8 * 3600 + 30 * 60 - 1, c, true);
+                assert(short_window.Poll(day + 8 * 3600 + 30 * 60, c, true) ==
+                       ChimeSchedule::kGoodMorning);
+                c = {24, true, 20, 8, true, true, 15, 30};
+                ChimeSchedule minute_busy;
+                minute_busy.Poll(day + 8 * 3600 + 30 * 60 - 1, c, true);
+                assert(minute_busy.Poll(day + 8 * 3600 + 30 * 60, c, false) == -1);
+                assert(minute_busy.Poll(day + 8 * 3600 + 30 * 60 + 1, c, true) == -1);
+                // Saving a new time does not reset de-duplication or catch up.
+                ChimeSchedule edited;
+                edited.Poll(day + 8 * 3600 + 30 * 60 - 1, c, true);
+                assert(edited.Poll(day + 8 * 3600 + 30 * 60, c, true) == ChimeSchedule::kGoodMorning);
+                c.quiet_end_minute = 29;
+                assert(edited.Poll(day + 8 * 3600 + 30 * 60 + 1, c, true) == -1);
+                c.quiet_end_minute = 31;
+                edited.Poll(day + 8 * 3600 + 31 * 60 - 1, c, true);
+                assert(edited.Poll(day + 8 * 3600 + 31 * 60, c, true) == ChimeSchedule::kGoodMorning);
+                edited.Poll(day + 8 * 3600 + 30 * 60 - 1, c, true);
+                c.quiet_end_minute = 30;
+                assert(edited.Poll(day + 8 * 3600 + 30 * 60, c, true) == -1);
             }
         '''
         with tempfile.TemporaryDirectory() as directory:

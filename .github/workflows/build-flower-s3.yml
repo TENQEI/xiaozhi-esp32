@@ -12,6 +12,7 @@ on:
       - main/CMakeLists.txt
       - scripts/prepare_flower_chimes.py
       - scripts/tests/test_flower_chime.py
+      - scripts/tests/test_flower_web.py
       - scripts/tests/test_notify_player.py
       - .github/workflows/build-flower-s3.yml
 
@@ -36,6 +37,8 @@ jobs:
         run: |
           source "$IDF_PATH/export.sh"
           python scripts/build.py flower-s3 --name flower-s3 --language zh-CN --zip
+      - name: Test web time settings with SDK cJSON
+        run: python -m unittest discover -s scripts/tests -p test_flower_web.py -v
       - name: Upload flashable firmware
         uses: actions/upload-artifact@v7
         with:
