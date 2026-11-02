@@ -1,0 +1,39 @@
+name: Build Flower S3
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, feat/flower-s3]
+    paths:
+      - main/boards/flower-s3/**
+      - .github/workflows/build-flower-s3.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flower-s3-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:release-v6.1
+    steps:
+      - uses: actions/checkout@v7
+      - name: Test build tooling
+        run: python -m unittest discover -s scripts/tests -v
+      - name: Build Chinese firmware with voice wake-up
+        shell: bash
+        run: |
+          source "$IDF_PATH/export.sh"
+          python scripts/build.py flower-s3 --name flower-s3 --language zh-CN --zip
+      - name: Upload flashable firmware
+        uses: actions/upload-artifact@v7
+        with:
+          name: flower-s3-zh-CN-${{ github.sha }}
+          path: |
+            build/merged-binary.bin
+            releases/*_flower-s3.zip
+          if-no-files-found: error
