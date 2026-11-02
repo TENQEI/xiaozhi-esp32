@@ -283,6 +283,7 @@ void Application::Run() {
 
         if (bits & MAIN_EVENT_CLOCK_TICK) {
             clock_ticks_++;
+            Board::GetInstance().OnClockTick();
             auto display = Board::GetInstance().GetDisplay();
             display->UpdateStatusBar();
 
@@ -1191,10 +1192,27 @@ void Application::ConfigureWakeWordForListening() {
 #endif
 }
 
-void Application::StartNotification(std::string audio_url, std::vector<NotifySubtitle> subtitles) {
+bool Application::PlayLocalNotification(const std::string& asset_name) {
+    if (GetDeviceState() != kDeviceStateIdle || notify_player_.IsBusy() ||
+        !audio_service_.IsPlaybackIdle()) {
+        return false;
+    }
+    void* data = nullptr;
+    size_t size = 0;
+    if (!Assets::GetInstance().GetAssetData(asset_name, data, size) || data == nullptr ||
+        size < 4 || size > NotifyPlayer::kMaxLocalAudioBytes || std::memcmp(data, "OggS", 4) != 0) {
+        ESP_LOGW(TAG, "Local notification asset missing or invalid: %s", asset_name.c_str());
+        return false;
+    }
+    // Own the bytes before yielding: an assets update may unmap the flash partition.
+    return StartNotification({}, {}, std::string(static_cast<const char*>(data), size));
+}
+
+bool Application::StartNotification(std::string audio_url, std::vector<NotifySubtitle> subtitles,
+                                    std::string local_audio) {
     if (GetDeviceState() != kDeviceStateIdle || notify_player_.IsBusy()) {
         ESP_LOGW(TAG, "Ignoring notify message while device is busy");
-        return;
+        return false;
     }
 
     auto& board = Board::GetInstance();
@@ -1208,7 +1226,7 @@ void Application::StartNotification(std::string audio_url, std::vector<NotifySub
 
     if (!SetDeviceState(kDeviceStateNotifying)) {
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
-        return;
+        return false;
     }
 
     audio_service_.ResetDecoder();
@@ -1216,25 +1234,31 @@ void Application::StartNotification(std::string audio_url, std::vector<NotifySub
     if (playback_id == 0) {
         playback_id = ++notification_playback_id_;
     }
-    audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
+    if (local_audio.empty()) {
+        audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
+    }
 
-    bool started = notify_player_.Start(
-        std::move(audio_url), std::move(subtitles), playback_id,
-        [this](uint32_t id, const std::string& text) {
-            Schedule([this, id, text]() {
-                if (GetDeviceState() == kDeviceStateNotifying && notification_playback_id_ == id) {
-                    Board::GetInstance().GetDisplay()->SetChatMessage("assistant", text.c_str());
-                }
-            });
-        },
-        [this](uint32_t id, bool success) {
-            Schedule([this, id, success]() { HandleNotificationFinished(id, success); });
+    auto subtitle_callback = [this](uint32_t id, const std::string& text) {
+        Schedule([this, id, text]() {
+            if (GetDeviceState() == kDeviceStateNotifying && notification_playback_id_ == id) {
+                Board::GetInstance().GetDisplay()->SetChatMessage("assistant", text.c_str());
+            }
         });
+    };
+    auto finished_callback = [this](uint32_t id, bool success) {
+        Schedule([this, id, success]() { HandleNotificationFinished(id, success); });
+    };
+    bool started =
+        local_audio.empty()
+            ? notify_player_.Start(std::move(audio_url), std::move(subtitles), playback_id,
+                                   std::move(subtitle_callback), finished_callback)
+            : notify_player_.StartLocal(std::move(local_audio), playback_id, finished_callback);
 
     if (!started) {
         ESP_LOGE(TAG, "Failed to start notification playback");
         StopNotification();
     }
+    return started;
 }
 
 void Application::StopNotification() {

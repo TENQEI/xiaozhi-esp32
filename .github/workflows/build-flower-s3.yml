@@ -6,6 +6,13 @@ on:
     branches: [main, feat/flower-s3]
     paths:
       - main/boards/flower-s3/**
+      - main/application.*
+      - main/notify/**
+      - main/boards/common/board.h
+      - main/CMakeLists.txt
+      - scripts/prepare_flower_chimes.py
+      - scripts/tests/test_flower_chime.py
+      - scripts/tests/test_notify_player.py
       - .github/workflows/build-flower-s3.yml
 
 permissions:
@@ -37,3 +44,18 @@ jobs:
             build/merged-binary.bin
             releases/*_flower-s3.zip
           if-no-files-found: error
+      - name: Build and validate a 24-recording test pack
+        shell: bash
+        run: |
+          source "$IDF_PATH/export.sh"
+          python - <<'PY'
+          from pathlib import Path
+          import shutil
+          root = Path("build/ci-chimes")
+          root.mkdir(parents=True, exist_ok=True)
+          for hour in range(24):
+              shutil.copyfile("main/assets/locales/zh-CN/1.ogg", root / f"{hour:02d}.ogg")
+          (root / "chime-config.json").write_text('{"enabled":false,"quiet_start":20,"quiet_end":4}')
+          PY
+          idf.py -D FLOWER_CHIME_SOURCE_DIR="$PWD/build/ci-chimes" reconfigure
+          idf.py build

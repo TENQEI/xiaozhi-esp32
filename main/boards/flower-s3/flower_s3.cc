@@ -2,6 +2,7 @@
 #include "button.h"
 #include "codecs/no_audio_codec.h"
 #include "config.h"
+#include "hourly_chime.h"
 #include "led/gpio_led.h"
 #include "wifi_board.h"
 
@@ -10,6 +11,7 @@ namespace {
 class FlowerS3Board : public WifiBoard {
 private:
     Button boot_button_{BOOT_BUTTON_GPIO, false, 3000};
+    flower::HourlyChime hourly_chime_;
 
     class FlowerAudioCodec : public NoAudioCodecSimplex {
     public:
@@ -37,7 +39,12 @@ public:
         });
         boot_button_.OnLongPress(
             [this]() { Application::GetInstance().Schedule([this]() { EnterWifiConfigMode(); }); });
+        boot_button_.OnDoubleClick([this]() {
+            Application::GetInstance().Schedule([this]() { hourly_chime_.Preview(); });
+        });
     }
+
+    void OnClockTick() override { hourly_chime_.Tick(); }
 
     AudioCodec* GetAudioCodec() override {
         static FlowerAudioCodec codec;

@@ -803,6 +803,12 @@ elseif(CONFIG_BOARD_TYPE_SEEED_STUDIO_SENSECAP_WATCHER)
     set(DEFAULT_EMOJI_COLLECTION noto-color-emoji_128)
 elseif(CONFIG_BOARD_TYPE_FLOWER_S3)
     set(BOARD_DIR "flower-s3")
+    if(NOT CMAKE_BUILD_EARLY_EXPANSION)
+        if(CONFIG_FLASH_CUSTOM_ASSETS OR CONFIG_FLASH_EXPRESSION_ASSETS)
+            message(FATAL_ERROR "Flower S3 chimes require the default assets build path")
+        endif()
+        include("${CMAKE_CURRENT_SOURCE_DIR}/boards/flower-s3/chime_assets.cmake")
+    endif()
 elseif(CONFIG_BOARD_TYPE_SEEED_XIAO_ESP32S3_RESPEAKER_XVF3800)
     set(BOARD_DIR "seeed/xiao-esp32s3-respeaker-xvf3800")
     set(BUILTIN_TEXT_FONT font_noto_sans_basic_14_1)
@@ -1391,6 +1397,10 @@ function(build_default_assets_bin)
         "${SDKCONFIG}"
         "${PROJECT_DIR}/scripts/build_default_assets.py"
     )
+    if(CONFIG_BOARD_TYPE_FLOWER_S3)
+        list(APPEND DEFAULT_ASSETS_DEPENDENCIES
+            ${FLOWER_CHIME_INPUTS} "${FLOWER_CHIME_STAGING}/flower_chime.json")
+    endif()
 
     # Prepare arguments for build script
     set(BUILD_ARGS

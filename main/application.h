@@ -117,6 +117,8 @@ public:
     void SetAecMode(AecMode mode);
     AecMode GetAecMode() const { return aec_mode_; }
     void PlaySound(const std::string_view& sound);
+    // Application-task only; bounded, cancellable playback of a local asset.
+    bool PlayLocalNotification(const std::string& asset_name);
     AudioService& GetAudioService() { return audio_service_; }
     
     /**
@@ -175,7 +177,8 @@ private:
     void ConfigureWakeWordForListening();
     void ShowStartupWakeWordHint();
     void HideStartupWakeWordHint();
-    void StartNotification(std::string audio_url, std::vector<NotifySubtitle> subtitles);
+    bool StartNotification(std::string audio_url, std::vector<NotifySubtitle> subtitles,
+                           std::string local_audio = {});
     void StopNotification();
     void HandleNotificationFinished(uint32_t playback_id, bool success);
 
