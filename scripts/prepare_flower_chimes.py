@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate 0/1/12/24 local Ogg/Opus recordings and stage Flower S3 assets."""
+"""Stage hourly chimes and an independent random phrase pack for Flower S3."""
 
 import argparse
 import json
@@ -62,13 +62,23 @@ def validate_ogg(data):
         raise ValueError("empty Opus audio packet")
 
 
-def prepare(source, output):
+def validate_files(files):
+    for file in files:
+        if file.stat().st_size > MAX_AUDIO_BYTES:
+            raise ValueError(f"{file.name}: recording exceeds 128 KiB")
+        try:
+            validate_ogg(file.read_bytes())
+        except ValueError as error:
+            raise ValueError(f"{file.name}: {error}") from error
+
+
+def prepare(source, output, *, greetings=None):
     source, output = Path(source).resolve(), Path(output).resolve()
     if not source.is_dir():
         raise ValueError(f"audio directory does not exist: {source}")
     if source == output or source in output.parents or output in source.parents:
         raise ValueError("source and staging directories must not overlap")
-    config = {"enabled": True, "quiet_start": 20, "quiet_end": 4}
+    config = {"enabled": True, "quiet_start": 20, "quiet_end": 8}
     path = source / "chime-config.json"
     if path.exists():
         custom = json.loads(path.read_text(encoding="utf-8"))
@@ -92,35 +102,91 @@ def prepare(source, output):
                     [f"{i:02d}.ogg" for i in range(24)])
         if [p.name for p in files] != expected:
             raise ValueError("12 files must be 01.ogg..12.ogg; 24 files must be 00.ogg..23.ogg")
-    for file in files:
-        if file.stat().st_size > MAX_AUDIO_BYTES:
-            raise ValueError(f"{file.name}: recording exceeds 128 KiB")
-        try:
-            validate_ogg(file.read_bytes())
-        except ValueError as error:
-            raise ValueError(f"{file.name}: {error}") from error
+    validate_files(files)
     # Validate before replacing only the files owned by this staging tool.
     output.mkdir(parents=True, exist_ok=True)
     for old in output.glob("flower_chime_*.ogg"):
         old.unlink()
     for index, file in enumerate(files):
         shutil.copyfile(file, output / f"flower_chime_{index:02d}.ogg")
-    manifest = {"version": 1, "count": count, **config}
-    manifest["enabled"] = config["enabled"] and count > 0
+    greeting_flags = greetings or {"good_morning": False, "good_night": False}
+    manifest = {"version": 1, "count": count, **config, **greeting_flags}
+    manifest["enabled"] = config["enabled"] and (count > 0 or any(greeting_flags.values()))
     (output / "flower_chime.json").write_text(json.dumps(manifest) + "\n", encoding="utf-8")
     return manifest
+
+
+def prepare_random(source, output):
+    output = Path(output).resolve()
+    files = []
+    if source is not None:
+        source = Path(source).resolve()
+        if not source.is_dir():
+            raise ValueError(f"random phrase directory does not exist: {source}")
+        if source == output or source in output.parents or output in source.parents:
+            raise ValueError("source and staging directories must not overlap")
+        files = sorted(p for p in source.iterdir() if p.is_file() and
+                       not p.name.startswith(".") and p.suffix.lower() == ".ogg")
+        if any(p.suffix.lower() in {".wav", ".mp3", ".m4a", ".flac", ".opus"}
+               for p in source.iterdir() if p.is_file() and not p.name.startswith(".")):
+            raise ValueError("convert random phrases to mono Ogg/Opus before building")
+    if len(files) > 64:
+        raise ValueError("provide at most 64 random phrase recordings")
+    validate_files(files)
+    output.mkdir(parents=True, exist_ok=True)
+    for old in output.glob("flower_random_*.ogg"):
+        old.unlink()
+    for index, file in enumerate(files):
+        shutil.copyfile(file, output / f"flower_random_{index:02d}.ogg")
+    manifest = {"version": 1, "count": len(files)}
+    (output / "flower_random.json").write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+    return manifest
+
+
+def prepare_greetings(source, output):
+    output = Path(output).resolve()
+    expected = {"good_morning.ogg": "flower_greeting_morning.ogg",
+                "good_night.ogg": "flower_greeting_night.ogg"}
+    files = []
+    if source is not None:
+        source = Path(source).resolve()
+        if not source.is_dir():
+            raise ValueError(f"greeting directory does not exist: {source}")
+        if source == output or source in output.parents or output in source.parents:
+            raise ValueError("source and staging directories must not overlap")
+        files = sorted(p for p in source.iterdir() if p.is_file() and
+                       not p.name.startswith(".") and p.suffix.lower() == ".ogg")
+        if any(p.name not in expected for p in files):
+            raise ValueError("greetings must be named good_morning.ogg and/or good_night.ogg")
+        if any(p.suffix.lower() in {".wav", ".mp3", ".m4a", ".flac", ".opus"}
+               for p in source.iterdir() if p.is_file() and not p.name.startswith(".")):
+            raise ValueError("convert greetings to mono Ogg/Opus before building")
+    validate_files(files)
+    output.mkdir(parents=True, exist_ok=True)
+    for old in output.glob("flower_greeting_*.ogg"):
+        old.unlink()
+    for file in files:
+        shutil.copyfile(file, output / expected[file.name])
+    return {"good_morning": any(p.name == "good_morning.ogg" for p in files),
+            "good_night": any(p.name == "good_night.ogg" for p in files)}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--random-source", type=Path)
+    parser.add_argument("--greetings-source", type=Path)
     args = parser.parse_args()
     try:
-        manifest = prepare(args.source, args.output)
+        greetings = prepare_greetings(args.greetings_source, args.output)
+        manifest = prepare(args.source, args.output, greetings=greetings)
+        random_manifest = prepare_random(args.random_source, args.output)
     except (ValueError, OSError) as error:
         parser.exit(1, f"Flower chimes: {error}\n")
     print(f"Flower chimes: {manifest['count']} recordings; enabled={manifest['enabled']}")
+    print(f"Flower random phrases: {random_manifest['count']} recordings")
+    print(f"Flower greetings: morning={greetings['good_morning']}; night={greetings['good_night']}")
 
 
 if __name__ == "__main__":

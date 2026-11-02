@@ -8,8 +8,6 @@ namespace flower {
 class HourlyChime {
 public:
     void Tick();
-    // Explicit user preview; bypasses the quiet window, never interrupts chat.
-    void Preview();
 
 private:
     bool loaded_ = false;

@@ -44,7 +44,7 @@ jobs:
             build/merged-binary.bin
             releases/*_flower-s3.zip
           if-no-files-found: error
-      - name: Build and validate a 24-recording test pack
+      - name: Build combined chime, greeting and random phrase test packs
         shell: bash
         run: |
           source "$IDF_PATH/export.sh"
@@ -55,7 +55,15 @@ jobs:
           root.mkdir(parents=True, exist_ok=True)
           for hour in range(24):
               shutil.copyfile("main/assets/locales/zh-CN/1.ogg", root / f"{hour:02d}.ogg")
-          (root / "chime-config.json").write_text('{"enabled":false,"quiet_start":20,"quiet_end":4}')
+          (root / "chime-config.json").write_text('{"enabled":false,"quiet_start":20,"quiet_end":8}')
+          phrases = Path("build/ci-phrases")
+          phrases.mkdir(parents=True, exist_ok=True)
+          for index in range(3):
+              shutil.copyfile(f"main/assets/locales/zh-CN/{index}.ogg", phrases / f"phrase-{index}.ogg")
+          greetings = Path("build/ci-greetings")
+          greetings.mkdir(parents=True, exist_ok=True)
+          for name in ("good_morning", "good_night"):
+              shutil.copyfile("main/assets/locales/zh-CN/1.ogg", greetings / f"{name}.ogg")
           PY
-          idf.py -D FLOWER_CHIME_SOURCE_DIR="$PWD/build/ci-chimes" reconfigure
+          idf.py -D FLOWER_CHIME_SOURCE_DIR="$PWD/build/ci-chimes" -D FLOWER_RANDOM_SOURCE_DIR="$PWD/build/ci-phrases" -D FLOWER_GREETING_SOURCE_DIR="$PWD/build/ci-greetings" reconfigure
           idf.py build

@@ -11,7 +11,9 @@ struct ChimeConfig {
     int count = 0;
     bool enabled = false;
     int quiet_start = 20;
-    int quiet_end = 4;
+    int quiet_end = 8;
+    bool good_morning = false;
+    bool good_night = false;
 };
 
 inline int ChimeIndex(int hour, int count) {
@@ -38,6 +40,9 @@ inline bool IsQuietHour(int hour, int start, int end) {
 // which OTA already adjusts to local civil time; do not add a timezone again.
 class ChimeSchedule {
 public:
+    static constexpr int kGoodMorning = -2;
+    static constexpr int kGoodNight = -3;
+
     int Poll(std::time_t now, const ChimeConfig& config, bool idle) {
         constexpr std::time_t kValidClock = 1704067200;  // 2024-01-01
         if (now < kValidClock) {
@@ -55,6 +60,16 @@ public:
             return -1;
         }
         const int hour = static_cast<int>(hour_key % 24);
+        // Boundary greetings take precedence over hourly clips, including the
+        // good-night clip at the first instant of the quiet window.
+        if (config.quiet_start != config.quiet_end) {
+            if (hour == config.quiet_start && config.good_night) {
+                return kGoodNight;
+            }
+            if (hour == config.quiet_end && config.good_morning) {
+                return kGoodMorning;
+            }
+        }
         if (IsQuietHour(hour, config.quiet_start, config.quiet_end)) {
             return -1;
         }

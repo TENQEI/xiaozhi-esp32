@@ -39,12 +39,19 @@ void HourlyChime::LoadConfig() {
     const int start = integer("quiet_start", 0, 23);
     const int end = integer("quiet_end", 0, 23);
     const auto* enabled = cJSON_GetObjectItemCaseSensitive(root.get(), "enabled");
+    const auto* morning = cJSON_GetObjectItemCaseSensitive(root.get(), "good_morning");
+    const auto* night = cJSON_GetObjectItemCaseSensitive(root.get(), "good_night");
     if (version != 1 || (count != 0 && count != 1 && count != 12 && count != 24) || start < 0 ||
-        end < 0 || !cJSON_IsBool(enabled)) {
+        end < 0 || !cJSON_IsBool(enabled) || (morning && !cJSON_IsBool(morning)) ||
+        (night && !cJSON_IsBool(night))) {
         ESP_LOGW(kTag, "Unsupported chime configuration");
         return;
     }
-    config_ = {count, count > 0 && cJSON_IsTrue(enabled), start, end};
+    const bool has_morning = cJSON_IsTrue(morning);
+    const bool has_night = cJSON_IsTrue(night);
+    config_ = {count,       (count > 0 || has_morning || has_night) && cJSON_IsTrue(enabled),
+               start,       end,
+               has_morning, has_night};
     ESP_LOGI(kTag, "Chimes: %d files, enabled=%d, quiet=%02d:00-%02d:00", count, config_.enabled,
              start, end);
 }
@@ -69,20 +76,12 @@ void HourlyChime::Tick() {
     const int index = schedule_.Poll(std::time(nullptr), config_, idle);
     if (index >= 0) {
         Play(index);
+    } else if (index == ChimeSchedule::kGoodMorning || index == ChimeSchedule::kGoodNight) {
+        const char* name = index == ChimeSchedule::kGoodMorning ? "flower_greeting_morning.ogg"
+                                                                : "flower_greeting_night.ogg";
+        const bool started = app.PlayLocalNotification(name);
+        ESP_LOGI(kTag, "%s %s", started ? "Playing" : "Skipped", name);
     }
-}
-
-void HourlyChime::Preview() {
-    if (Application::GetInstance().GetDeviceState() != kDeviceStateIdle) {
-        return;
-    }
-    if (!loaded_) {
-        LoadConfig();
-    }
-    const auto now = std::time(nullptr);
-    // With an unsynchronized clock, preview the first file rather than a false hour.
-    const int hour = now >= 1704067200 ? static_cast<int>((now / 3600) % 24) : 1;
-    Play(ChimeIndex(hour, config_.count));
 }
 
 }  // namespace flower
