@@ -58,7 +58,7 @@ class FlowerWebTest(unittest.TestCase):
                     constexpr int NVS_READONLY = 0, NVS_READWRITE = 1;
                     inline bool fail_open = false, fail_set = false, fail_commit = false;
                     inline std::optional<uint32_t> persisted, pending;
-                    inline std::vector<uint32_t> persisted_blob, pending_blob;
+                    inline std::vector<uint32_t> persisted_blob, legacy_blob, pending_blob;
                     inline int commits = 0;
                     inline int nvs_open(const char* ns, int, nvs_handle_t* handle) {
                         assert(std::strcmp(ns, "flower_time") == 0);
@@ -73,12 +73,14 @@ class FlowerWebTest(unittest.TestCase):
                         if (fail_set) return ESP_FAIL;
                         pending = value; return ESP_OK;
                     }
-                    inline int nvs_get_blob(nvs_handle_t, const char*, void* out, size_t* size) {
-                        if (persisted_blob.empty() || *size < persisted_blob.size() * 4) return ESP_FAIL;
-                        *size = persisted_blob.size() * 4;
-                        std::memcpy(out, persisted_blob.data(), *size); return ESP_OK;
+                    inline int nvs_get_blob(nvs_handle_t, const char* key, void* out, size_t* size) {
+                        auto& blob = std::strcmp(key, "schedule_v3") == 0 ? persisted_blob : legacy_blob;
+                        if (blob.empty() || *size < blob.size() * 4) return ESP_FAIL;
+                        *size = blob.size() * 4;
+                        std::memcpy(out, blob.data(), *size); return ESP_OK;
                     }
-                    inline int nvs_set_blob(nvs_handle_t, const char*, const void* value, size_t size) {
+                    inline int nvs_set_blob(nvs_handle_t, const char* key, const void* value, size_t size) {
+                        assert(std::strcmp(key, "schedule_v3") == 0);
                         if (fail_set) return ESP_FAIL;
                         const auto* words = static_cast<const uint32_t*>(value);
                         pending_blob.assign(words, words + size / 4); return ESP_OK;
@@ -218,10 +220,17 @@ class FlowerWebTest(unittest.TestCase):
                     assert(commits == 0);
                     persisted = PackTimes({510, 1215});
                     GreetingTimeSettings legacy;
-                    assert(legacy.GetSchedule().mode == CalendarMode::Daily);
                     assert(legacy.GetSchedule().restday.morning == 510);
                     assert(commits == 0); // migration does not write during boot
                     persisted.reset();
+                    for (uint32_t mode : {0, 1, 2}) {
+                        legacy_blob = {mode, PackTimes({510,1215}), PackTimes({570,1320})};
+                        GreetingTimeSettings migrated;
+                        assert(migrated.GetSchedule().workday.morning == 510);
+                        assert(migrated.GetSchedule().restday.morning == (mode == 0 ? 510 : 570));
+                    }
+                    legacy_blob.clear();
+                    assert(commits == 0);
                     assert(times.Save({510, 1215}));
                     times.SetDefaults({480, 1200});
                     assert(times.Get().morning == 510); // saved override wins
@@ -233,11 +242,11 @@ class FlowerWebTest(unittest.TestCase):
                     assert(times.Get().morning == 510);
                     assert(GreetingTimeSettings().Get().morning == 510);
                     auto backup = persisted_blob;
-                    persisted_blob = {99, 0, 0};
+                    persisted_blob = {UINT32_MAX, 0};
                     assert(GreetingTimeSettings().Get().morning == 480); // reject corrupt storage
-                    persisted_blob = {0, UINT32_MAX, 0};
+                    persisted_blob = {0, UINT32_MAX};
                     assert(GreetingTimeSettings().Get().morning == 480);
-                    persisted_blob = {0, 0};
+                    persisted_blob = {0};
                     assert(GreetingTimeSettings().Get().morning == 480);
                     persisted_blob = backup;
 
@@ -257,12 +266,11 @@ class FlowerWebTest(unittest.TestCase):
                     assert(token.size() == 32);
                     for (size_t i = 0; i < token.size(); i += 2) assert(token.substr(i, 2) == "2a");
                     auto get = Send(HTTP_GET, "/api/times");
-                    assert(get.response == R"({"mode":0,"work_morning":510,"work_night":1215,"rest_morning":510,"rest_night":1215,"calendar_year":2026})");
+                    assert(get.response == R"({"work_morning":510,"work_night":1215,"rest_morning":510,"rest_night":1215})");
                     assert(get.response_headers["Cache-Control"] == "no-store");
-                    std::string valid = R"({"mode":2,"work_morning":0,"work_night":1439,"rest_morning":540,"rest_night":1320})";
+                    std::string valid = R"({"work_morning":0,"work_night":1439,"rest_morning":540,"rest_night":1320})";
                     auto saved = Send(HTTP_POST, "/api/times", valid, token);
                     assert(saved.status == "200 OK");
-                    assert(times.GetSchedule().mode == CalendarMode::ChinaHolidays);
                     assert(times.GetSchedule().restday.morning == 540);
                     assert(GreetingTimeSettings().Get().night == 1439);
                     assert(GreetingTimeSettings().GetSchedule().restday.night == 1320);
@@ -286,12 +294,11 @@ class FlowerWebTest(unittest.TestCase):
                         assert(Send(HTTP_POST, "/api/times", bad, token).status == "400 Bad Request");
                     }
                     for (std::string bad : std::vector<std::string>{
-                        R"({"mode":3,"work_morning":0,"work_night":1,"rest_morning":2,"rest_night":3})",
-                        R"({"mode":true,"work_morning":0,"work_night":1,"rest_morning":2,"rest_night":3})",
-                        R"({"mode":1,"work_morning":0,"work_night":1,"rest_morning":2,"rest_night":1440})",
-                        R"({"mode":1,"work_morning":0,"work_night":1,"rest_morning":-1,"rest_night":3})",
-                        R"({"mode":1,"work_morning":0,"work_night":1,"rest_morning":2.5,"rest_night":3})",
-                        R"({"mode":1,"work_morning":0,"work_night":1,"rest_morning":2,"rest_morning":3})"}) {
+                        R"({"work_morning":true,"work_night":1,"rest_morning":2,"rest_night":3})",
+                        R"({"work_morning":0,"work_night":1,"rest_morning":2,"rest_night":1440})",
+                        R"({"work_morning":0,"work_night":1,"rest_morning":-1,"rest_night":3})",
+                        R"({"work_morning":0,"work_night":1,"rest_morning":2.5,"rest_night":3})",
+                        R"({"work_morning":0,"work_night":1,"rest_morning":2,"rest_morning":3})"}) {
                         assert(Send(HTTP_POST, "/api/times", bad, token).status == "400 Bad Request");
                     }
                     assert(Send(HTTP_POST, "/api/times", valid + '\0' + "x", token).status == "400 Bad Request");
@@ -313,17 +320,17 @@ class FlowerWebTest(unittest.TestCase):
                     assert(Send(HTTP_GET, "/").status == "403 Forbidden");
                     assert(Send(HTTP_GET, "/", "", "", "192.168.50.13:8080").status == "200 OK");
 
-                    // A reader sees one complete mode + both time pairs, never a mixed version.
-                    GreetingSchedule first{CalendarMode::Daily, {1,2}, {3,4}};
-                    GreetingSchedule second{CalendarMode::ChinaHolidays, {5,6}, {7,8}};
+                    // A reader sees both time pairs together, never a mixed version.
+                    GreetingSchedule first{{1,2}, {3,4}};
+                    GreetingSchedule second{{5,6}, {7,8}};
                     assert(times.SaveSchedule(first));
                     std::atomic<bool> done{false};
                     std::thread reader([&] {
                         while (!done.load()) {
                             auto value = times.GetSchedule();
-                            assert((value.mode == first.mode && value.workday.morning == 1 &&
+                            assert((value.workday.morning == 1 &&
                                     value.workday.night == 2 && value.restday.morning == 3 && value.restday.night == 4) ||
-                                   (value.mode == second.mode && value.workday.morning == 5 &&
+                                   (value.workday.morning == 5 &&
                                     value.workday.night == 6 && value.restday.morning == 7 && value.restday.night == 8));
                         }
                     });

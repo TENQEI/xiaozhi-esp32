@@ -7,7 +7,7 @@
 namespace flower {
 
 // HTTP owns writes. The mutex protects only a small in-memory copy; flash I/O
-// never holds it. One NVS blob commits both schedules and their mode together.
+// never holds it. One NVS blob commits both schedules together.
 class GreetingTimeSettings {
 public:
     GreetingTimeSettings();

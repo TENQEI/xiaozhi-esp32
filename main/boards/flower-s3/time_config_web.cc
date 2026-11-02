@@ -20,19 +20,18 @@ constexpr char kPage[] = R"HTML(<!doctype html>
 <style>
 body{font:17px system-ui,sans-serif;max-width:460px;margin:48px auto;padding:0 24px;color:#222;background:#f7f7f4}
 form{background:white;border-radius:16px;padding:24px}label{display:flex;justify-content:space-between;align-items:center;margin:18px 0}
-input,button,select{font:inherit;padding:10px;border:1px solid #aaa;border-radius:8px}button{width:100%;background:#235b45;color:white;border:0;margin-top:16px}
-fieldset{border:1px solid #ddd;border-radius:8px;margin:16px 0;padding:0 12px}select{max-width:65%}#calendar{color:#765000}
+input,button{font:inherit;padding:10px;border:1px solid #aaa;border-radius:8px}button{width:100%;background:#235b45;color:white;border:0;margin-top:16px}
+fieldset{border:1px solid #ddd;border-radius:8px;margin:16px 0;padding:0 12px}
 button:disabled{opacity:.5}p{line-height:1.6}#status{min-height:3em;white-space:pre-line}
 </style>
 <h1>早晚安时间</h1>
 <p>使用设备校时后的本地时间。晚安后进入免打扰，早安时结束免打扰。</p>
 <form id="form">
-<label>执行方式 <select id="mode" disabled><option value="0">每天</option><option value="1">工作日</option><option value="2">中国节假日</option></select></label>
-<p id="rule"></p><p id="calendar"></p>
-<fieldset><legend id="work-title">每天</legend>
+<p>按星期自动切换：工作日为周一至周五，双休为周六、周日。</p>
+<fieldset><legend>工作日（周一至周五）</legend>
 <label>早安 <input id="work_morning" type="time" step="60" required disabled></label>
 <label>晚安 <input id="work_night" type="time" step="60" required disabled></label></fieldset>
-<fieldset id="rest-group" hidden><legend>休息日</legend>
+<fieldset><legend>双休（周六、周日）</legend>
 <label>早安 <input id="rest_morning" type="time" step="60" required disabled></label>
 <label>晚安 <input id="rest_night" type="time" step="60" required disabled></label></fieldset>
 <button id="save" disabled>保存时间</button>
@@ -41,24 +40,10 @@ button:disabled{opacity:.5}p{line-height:1.6}#status{min-height:3em;white-space:
 <p>保存后立即生效，重启后保留。一套时间中的早晚安相同，表示当天关闭免打扰和自动早晚安。需要已有对应音频；本页只修改时间。</p>
 <script>
 'use strict';
-const token='@@TOKEN@@', mode=document.getElementById('mode');
+const token='@@TOKEN@@';
 const keys=['work_morning','work_night','rest_morning','rest_night'];
 const inputs=Object.fromEntries(keys.map(k=>[k,document.getElementById(k)]));
 const button=document.getElementById('save'),status=document.getElementById('status');
-let calendarYear=0;
-function updateMode(){
-  const m=Number(mode.value);
-  document.getElementById('rest-group').hidden=m===0;
-  for(const k of ['rest_morning','rest_night'])inputs[k].disabled=m===0;
-  document.getElementById('work-title').textContent=m===0?'每天':'工作日';
-  document.getElementById('rule').textContent=[
-    '每天使用同一套时间。',
-    '周一至周五使用工作日时间，周末使用休息日时间。',
-    '法定放假使用休息日时间，周末调休补班使用工作日时间。'][m];
-  document.getElementById('calendar').textContent=m===2?
-    '已内置 '+calendarYear+' 年官方日历。其他年份按普通周末规则执行，需更新日历后才能识别调休。':'';
-}
-mode.addEventListener('change',updateMode);
 const format=n=>String(Math.floor(n/60)).padStart(2,'0')+':'+String(n%60).padStart(2,'0');
 const minutes=s=>{const p=s.split(':').map(Number);return p[0]*60+p[1]};
 async function request(options){
@@ -67,18 +52,17 @@ async function request(options){
   return r.json();
 }
 request().then(t=>{
-  mode.value=String(t.mode);calendarYear=t.calendar_year;
   for(const k of keys){inputs[k].value=format(t[k]);inputs[k].disabled=false}
-  mode.disabled=button.disabled=false;updateMode();status.textContent='已读取当前设置。';
+  button.disabled=false;status.textContent='已读取当前设置。';
 }).catch(()=>status.textContent='读取失败，请确认设备已连接 Wi-Fi，然后刷新页面。');
 document.getElementById('form').addEventListener('submit',async e=>{
   e.preventDefault();button.disabled=true;status.textContent='正在保存…';
-  const times={mode:Number(mode.value)};
-  for(const k of keys)times[k]=minutes(inputs[k].value||inputs[k.replace('rest_','work_')].value);
+  const times={};
+  for(const k of keys)times[k]=minutes(inputs[k].value);
   try{
     const saved=await request({method:'POST',headers:{'Content-Type':'application/json','X-Flower-Token':token},body:JSON.stringify(times)});
-    mode.value=String(saved.mode);for(const k of keys)inputs[k].value=format(saved[k]);updateMode();
-    status.textContent='已保存。按所选规则执行两套时间，下次到达对应时间时播放，不补播已过去的时间。';
+    for(const k of keys)inputs[k].value=format(saved[k]);
+    status.textContent='已保存。工作日和双休按星期自动切换，下次到达对应时间时播放，不补播已过去的时间。';
   }catch{status.textContent='未确认保存成功，请刷新页面核对后重试。'}
   finally{button.disabled=false}
 });
@@ -222,10 +206,9 @@ esp_err_t TimeConfigWeb::Serve(httpd_req_t* request) {
                        ? item->valueint
                        : -1;
         };
-        GreetingSchedule schedule{static_cast<CalendarMode>(integer("mode", 2)),
-                                  {integer("work_morning", 1439), integer("work_night", 1439)},
+        GreetingSchedule schedule{{integer("work_morning", 1439), integer("work_night", 1439)},
                                   {integer("rest_morning", 1439), integer("rest_night", 1439)}};
-        if (!root || !cJSON_IsObject(root.get()) || cJSON_GetArraySize(root.get()) != 5 ||
+        if (!root || !cJSON_IsObject(root.get()) || cJSON_GetArraySize(root.get()) != 4 ||
             !ValidSchedule(schedule)) {
             return Reply(request, "400 Bad Request", "时间设置格式无效。");
         }
@@ -236,10 +219,9 @@ esp_err_t TimeConfigWeb::Serve(httpd_req_t* request) {
     const auto schedule = times_.GetSchedule();
     char json[192];
     std::snprintf(json, sizeof(json),
-                  "{\"mode\":%d,\"work_morning\":%d,\"work_night\":%d,"
-                  "\"rest_morning\":%d,\"rest_night\":%d,\"calendar_year\":%d}",
-                  static_cast<int>(schedule.mode), schedule.workday.morning, schedule.workday.night,
-                  schedule.restday.morning, schedule.restday.night, kChinaCalendarYear);
+                  "{\"work_morning\":%d,\"work_night\":%d,\"rest_morning\":%d,\"rest_night\":%d}",
+                  schedule.workday.morning, schedule.workday.night, schedule.restday.morning,
+                  schedule.restday.night);
     httpd_resp_set_type(request, "application/json");
     return httpd_resp_send(request, json, HTTPD_RESP_USE_STRLEN);
 }
