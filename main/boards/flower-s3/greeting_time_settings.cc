@@ -6,7 +6,8 @@
 namespace flower {
 namespace {
 constexpr char kNamespace[] = "flower_time";
-constexpr char kKey[] = "times_v1";
+constexpr char kKey[] = "schedule_v2";
+constexpr char kLegacyKey[] = "times_v1";
 constexpr char kTag[] = "FlowerTime";
 }  // namespace
 
@@ -15,26 +16,48 @@ GreetingTimeSettings::GreetingTimeSettings() {
     if (nvs_open(kNamespace, NVS_READONLY, &handle) != ESP_OK) {
         return;
     }
-    uint32_t packed;
-    if (nvs_get_u32(handle, kKey, &packed) == ESP_OK && ValidTimes(UnpackTimes(packed))) {
-        override_.store(packed);
+    uint32_t stored[3] = {};
+    size_t size = sizeof(stored);
+    const auto error = nvs_get_blob(handle, kKey, stored, &size);
+    GreetingSchedule decoded{static_cast<CalendarMode>(stored[0]), UnpackTimes(stored[1]),
+                             UnpackTimes(stored[2])};
+    if (error == ESP_OK && size == sizeof(stored) && ValidSchedule(decoded)) {
+        schedule_ = decoded;
+        overridden_ = true;
+    } else {
+        uint32_t packed;
+        if (nvs_get_u32(handle, kLegacyKey, &packed) == ESP_OK && ValidTimes(UnpackTimes(packed))) {
+            // Existing devices keep their times and daily behavior. Persist v2
+            // on the next explicit save; do not consume flash writes at boot.
+            schedule_ = {CalendarMode::Daily, UnpackTimes(packed), UnpackTimes(packed)};
+            overridden_ = true;
+        }
     }
     nvs_close(handle);
 }
 
-GreetingTimes GreetingTimeSettings::Get() const {
-    const uint32_t packed = override_.load();
-    return UnpackTimes(packed == kUnset ? defaults_.load() : packed);
+GreetingTimes GreetingTimeSettings::Get() const { return GetSchedule().workday; }
+
+GreetingSchedule GreetingTimeSettings::GetSchedule() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return schedule_;
 }
 
 void GreetingTimeSettings::SetDefaults(GreetingTimes times) {
     if (ValidTimes(times)) {
-        defaults_.store(PackTimes(times));
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!overridden_) {
+            schedule_ = {CalendarMode::Daily, times, times};
+        }
     }
 }
 
 bool GreetingTimeSettings::Save(GreetingTimes times) {
-    if (!ValidTimes(times)) {
+    return SaveSchedule({CalendarMode::Daily, times, times});
+}
+
+bool GreetingTimeSettings::SaveSchedule(const GreetingSchedule& schedule) {
+    if (!ValidSchedule(schedule)) {
         return false;
     }
     nvs_handle_t handle;
@@ -43,7 +66,9 @@ bool GreetingTimeSettings::Save(GreetingTimes times) {
         ESP_LOGW(kTag, "Cannot open time settings: %s", esp_err_to_name(error));
         return false;
     }
-    error = nvs_set_u32(handle, kKey, PackTimes(times));
+    const uint32_t stored[] = {static_cast<uint32_t>(schedule.mode), PackTimes(schedule.workday),
+                               PackTimes(schedule.restday)};
+    error = nvs_set_blob(handle, kKey, stored, sizeof(stored));
     if (error == ESP_OK) {
         error = nvs_commit(handle);
     }
@@ -52,9 +77,12 @@ bool GreetingTimeSettings::Save(GreetingTimes times) {
         ESP_LOGW(kTag, "Cannot save time settings: %s", esp_err_to_name(error));
         return false;
     }
-    override_.store(PackTimes(times));
-    ESP_LOGI(kTag, "Saved greeting times: morning=%02d:%02d, night=%02d:%02d", times.morning / 60,
-             times.morning % 60, times.night / 60, times.night % 60);
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        schedule_ = schedule;
+        overridden_ = true;
+    }
+    ESP_LOGI(kTag, "Saved greeting schedules, mode=%d", static_cast<int>(schedule.mode));
     return true;
 }
 

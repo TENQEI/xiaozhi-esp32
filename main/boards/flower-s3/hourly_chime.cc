@@ -74,12 +74,13 @@ void HourlyChime::Tick() {
     if (!loaded_ && idle) {
         LoadConfig();
     }
-    const auto times = times_.Get();
+    const auto now = std::time(nullptr);
+    const auto times = TimesForDate(times_.GetSchedule(), now);
     config_.quiet_start = times.night / 60;
     config_.quiet_start_minute = times.night % 60;
     config_.quiet_end = times.morning / 60;
     config_.quiet_end_minute = times.morning % 60;
-    const int index = schedule_.Poll(std::time(nullptr), config_, idle);
+    const int index = schedule_.Poll(now, config_, idle);
     if (index >= 0) {
         Play(index);
     } else if (index == ChimeSchedule::kGoodMorning || index == ChimeSchedule::kGoodNight) {

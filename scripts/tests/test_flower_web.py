@@ -53,10 +53,12 @@ class FlowerWebTest(unittest.TestCase):
                     #include <cstdint>
                     #include <cstring>
                     #include <optional>
+                    #include <vector>
                     using nvs_handle_t = unsigned;
                     constexpr int NVS_READONLY = 0, NVS_READWRITE = 1;
                     inline bool fail_open = false, fail_set = false, fail_commit = false;
                     inline std::optional<uint32_t> persisted, pending;
+                    inline std::vector<uint32_t> persisted_blob, pending_blob;
                     inline int commits = 0;
                     inline int nvs_open(const char* ns, int, nvs_handle_t* handle) {
                         assert(std::strcmp(ns, "flower_time") == 0);
@@ -71,11 +73,23 @@ class FlowerWebTest(unittest.TestCase):
                         if (fail_set) return ESP_FAIL;
                         pending = value; return ESP_OK;
                     }
+                    inline int nvs_get_blob(nvs_handle_t, const char*, void* out, size_t* size) {
+                        if (persisted_blob.empty() || *size < persisted_blob.size() * 4) return ESP_FAIL;
+                        *size = persisted_blob.size() * 4;
+                        std::memcpy(out, persisted_blob.data(), *size); return ESP_OK;
+                    }
+                    inline int nvs_set_blob(nvs_handle_t, const char*, const void* value, size_t size) {
+                        if (fail_set) return ESP_FAIL;
+                        const auto* words = static_cast<const uint32_t*>(value);
+                        pending_blob.assign(words, words + size / 4); return ESP_OK;
+                    }
                     inline int nvs_commit(nvs_handle_t) {
                         if (fail_commit) return ESP_FAIL;
-                        persisted = pending; ++commits; return ESP_OK;
+                        if (pending) persisted = pending;
+                        if (!pending_blob.empty()) persisted_blob = pending_blob;
+                        ++commits; return ESP_OK;
                     }
-                    inline void nvs_close(nvs_handle_t) { pending.reset(); }
+                    inline void nvs_close(nvs_handle_t) { pending.reset(); pending_blob.clear(); }
                 ''',
                 "esp_random.h": r'''
                     #pragma once
@@ -202,6 +216,12 @@ class FlowerWebTest(unittest.TestCase):
                     assert(times.Get().morning == 540);
                     assert(!times.Save({-1, 1200}) && !times.Save({0, 1440}));
                     assert(commits == 0);
+                    persisted = PackTimes({510, 1215});
+                    GreetingTimeSettings legacy;
+                    assert(legacy.GetSchedule().mode == CalendarMode::Daily);
+                    assert(legacy.GetSchedule().restday.morning == 510);
+                    assert(commits == 0); // migration does not write during boot
+                    persisted.reset();
                     assert(times.Save({510, 1215}));
                     times.SetDefaults({480, 1200});
                     assert(times.Get().morning == 510); // saved override wins
@@ -212,10 +232,14 @@ class FlowerWebTest(unittest.TestCase):
                     fail_commit = true; assert(!times.Save({0, 1})); fail_commit = false;
                     assert(times.Get().morning == 510);
                     assert(GreetingTimeSettings().Get().morning == 510);
-                    auto backup = persisted;
-                    persisted = UINT32_MAX;
+                    auto backup = persisted_blob;
+                    persisted_blob = {99, 0, 0};
                     assert(GreetingTimeSettings().Get().morning == 480); // reject corrupt storage
-                    persisted = backup;
+                    persisted_blob = {0, UINT32_MAX, 0};
+                    assert(GreetingTimeSettings().Get().morning == 480);
+                    persisted_blob = {0, 0};
+                    assert(GreetingTimeSettings().Get().morning == 480);
+                    persisted_blob = backup;
 
                     TimeConfigWeb web(times);
                     fail_start = true; web.SetConnected(true); assert(routes.empty());
@@ -233,12 +257,15 @@ class FlowerWebTest(unittest.TestCase):
                     assert(token.size() == 32);
                     for (size_t i = 0; i < token.size(); i += 2) assert(token.substr(i, 2) == "2a");
                     auto get = Send(HTTP_GET, "/api/times");
-                    assert(get.response == R"({"morning":510,"night":1215})");
+                    assert(get.response == R"({"mode":0,"work_morning":510,"work_night":1215,"rest_morning":510,"rest_night":1215,"calendar_year":2026})");
                     assert(get.response_headers["Cache-Control"] == "no-store");
-                    std::string valid = R"({"morning":0,"night":1439})";
+                    std::string valid = R"({"mode":2,"work_morning":0,"work_night":1439,"rest_morning":540,"rest_night":1320})";
                     auto saved = Send(HTTP_POST, "/api/times", valid, token);
-                    assert(saved.status == "200 OK" && saved.response == valid);
+                    assert(saved.status == "200 OK");
+                    assert(times.GetSchedule().mode == CalendarMode::ChinaHolidays);
+                    assert(times.GetSchedule().restday.morning == 540);
                     assert(GreetingTimeSettings().Get().night == 1439);
+                    assert(GreetingTimeSettings().GetSchedule().restday.night == 1320);
                     // Live snapshot reaches the real scheduling policy without rebooting.
                     ChimeConfig config{0, true, 0, 0, true, true};
                     auto live = times.Get(); config.quiet_start = live.night / 60;
@@ -258,8 +285,17 @@ class FlowerWebTest(unittest.TestCase):
                         R"({"morning":1,"morning":2})", valid + " trailing"}) {
                         assert(Send(HTTP_POST, "/api/times", bad, token).status == "400 Bad Request");
                     }
+                    for (std::string bad : std::vector<std::string>{
+                        R"({"mode":3,"work_morning":0,"work_night":1,"rest_morning":2,"rest_night":3})",
+                        R"({"mode":true,"work_morning":0,"work_night":1,"rest_morning":2,"rest_night":3})",
+                        R"({"mode":1,"work_morning":0,"work_night":1,"rest_morning":2,"rest_night":1440})",
+                        R"({"mode":1,"work_morning":0,"work_night":1,"rest_morning":-1,"rest_night":3})",
+                        R"({"mode":1,"work_morning":0,"work_night":1,"rest_morning":2.5,"rest_night":3})",
+                        R"({"mode":1,"work_morning":0,"work_night":1,"rest_morning":2,"rest_morning":3})"}) {
+                        assert(Send(HTTP_POST, "/api/times", bad, token).status == "400 Bad Request");
+                    }
                     assert(Send(HTTP_POST, "/api/times", valid + '\0' + "x", token).status == "400 Bad Request");
-                    assert(Send(HTTP_POST, "/api/times", std::string(129, 'x'), token).status == "400 Bad Request");
+                    assert(Send(HTTP_POST, "/api/times", std::string(193, 'x'), token).status == "400 Bad Request");
                     assert(Send(HTTP_POST, "/api/times", valid, "bad").status == "403 Forbidden");
                     assert(Send(HTTP_POST, "/api/times", valid, token, "evil.test:8080").status == "403 Forbidden");
                     assert(Send(HTTP_POST, "/api/times", valid, token, "192.168.50.12:8080", "text/plain").status == "403 Forbidden");
@@ -268,7 +304,7 @@ class FlowerWebTest(unittest.TestCase):
                     assert(commits == before);
                     assert(times.Get().morning == 0 && times.Get().night == 1439);
                     fail_commit = true;
-                    assert(Send(HTTP_POST, "/api/times", R"({"morning":1,"night":2})", token).status == "500 Internal Server Error");
+                    assert(Send(HTTP_POST, "/api/times", valid, token).status == "500 Internal Server Error");
                     fail_commit = false;
                     assert(times.Get().morning == 0 && times.Get().night == 1439);
                     web.SetConnected(false);
@@ -277,18 +313,22 @@ class FlowerWebTest(unittest.TestCase):
                     assert(Send(HTTP_GET, "/").status == "403 Forbidden");
                     assert(Send(HTTP_GET, "/", "", "", "192.168.50.13:8080").status == "200 OK");
 
-                    // Repeated HTTP writes cannot tear the pair seen by the audio/main task.
-                    assert(times.Save({1, 2}));
+                    // A reader sees one complete mode + both time pairs, never a mixed version.
+                    GreetingSchedule first{CalendarMode::Daily, {1,2}, {3,4}};
+                    GreetingSchedule second{CalendarMode::ChinaHolidays, {5,6}, {7,8}};
+                    assert(times.SaveSchedule(first));
                     std::atomic<bool> done{false};
                     std::thread reader([&] {
                         while (!done.load()) {
-                            auto value = times.Get();
-                            assert((value.morning == 1 && value.night == 2) ||
-                                   (value.morning == 3 && value.night == 4));
+                            auto value = times.GetSchedule();
+                            assert((value.mode == first.mode && value.workday.morning == 1 &&
+                                    value.workday.night == 2 && value.restday.morning == 3 && value.restday.night == 4) ||
+                                   (value.mode == second.mode && value.workday.morning == 5 &&
+                                    value.workday.night == 6 && value.restday.morning == 7 && value.restday.night == 8));
                         }
                     });
                     for (int i = 0; i < 1000; ++i) {
-                        assert(times.Save(i % 2 ? GreetingTimes{1, 2} : GreetingTimes{3, 4}));
+                        assert(times.SaveSchedule(i % 2 ? first : second));
                     }
                     done.store(true); reader.join();
                 }

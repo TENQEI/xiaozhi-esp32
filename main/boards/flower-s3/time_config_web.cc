@@ -20,22 +20,45 @@ constexpr char kPage[] = R"HTML(<!doctype html>
 <style>
 body{font:17px system-ui,sans-serif;max-width:460px;margin:48px auto;padding:0 24px;color:#222;background:#f7f7f4}
 form{background:white;border-radius:16px;padding:24px}label{display:flex;justify-content:space-between;align-items:center;margin:18px 0}
-input,button{font:inherit;padding:10px;border:1px solid #aaa;border-radius:8px}button{width:100%;background:#235b45;color:white;border:0;margin-top:16px}
+input,button,select{font:inherit;padding:10px;border:1px solid #aaa;border-radius:8px}button{width:100%;background:#235b45;color:white;border:0;margin-top:16px}
+fieldset{border:1px solid #ddd;border-radius:8px;margin:16px 0;padding:0 12px}select{max-width:65%}#calendar{color:#765000}
 button:disabled{opacity:.5}p{line-height:1.6}#status{min-height:3em;white-space:pre-line}
 </style>
 <h1>早晚安时间</h1>
 <p>使用设备校时后的本地时间。晚安后进入免打扰，早安时结束免打扰。</p>
 <form id="form">
-<label>早安 <input id="morning" type="time" step="60" required disabled></label>
-<label>晚安 <input id="night" type="time" step="60" required disabled></label>
+<label>执行方式 <select id="mode" disabled><option value="0">每天</option><option value="1">工作日</option><option value="2">中国节假日</option></select></label>
+<p id="rule"></p><p id="calendar"></p>
+<fieldset><legend id="work-title">每天</legend>
+<label>早安 <input id="work_morning" type="time" step="60" required disabled></label>
+<label>晚安 <input id="work_night" type="time" step="60" required disabled></label></fieldset>
+<fieldset id="rest-group" hidden><legend>休息日</legend>
+<label>早安 <input id="rest_morning" type="time" step="60" required disabled></label>
+<label>晚安 <input id="rest_night" type="time" step="60" required disabled></label></fieldset>
 <button id="save" disabled>保存时间</button>
 </form>
 <p id="status" role="status" aria-live="polite">正在读取…</p>
-<p>保存后立即生效，重启后保留。两个时间相同表示关闭免打扰和自动早晚安。需要已有对应音频；本页只修改时间。</p>
+<p>保存后立即生效，重启后保留。一套时间中的早晚安相同，表示当天关闭免打扰和自动早晚安。需要已有对应音频；本页只修改时间。</p>
 <script>
 'use strict';
-const token='@@TOKEN@@', morning=document.getElementById('morning'),night=document.getElementById('night');
+const token='@@TOKEN@@', mode=document.getElementById('mode');
+const keys=['work_morning','work_night','rest_morning','rest_night'];
+const inputs=Object.fromEntries(keys.map(k=>[k,document.getElementById(k)]));
 const button=document.getElementById('save'),status=document.getElementById('status');
+let calendarYear=0;
+function updateMode(){
+  const m=Number(mode.value);
+  document.getElementById('rest-group').hidden=m===0;
+  for(const k of ['rest_morning','rest_night'])inputs[k].disabled=m===0;
+  document.getElementById('work-title').textContent=m===0?'每天':'工作日';
+  document.getElementById('rule').textContent=[
+    '每天使用同一套时间。',
+    '周一至周五使用工作日时间，周末使用休息日时间。',
+    '法定放假使用休息日时间，周末调休补班使用工作日时间。'][m];
+  document.getElementById('calendar').textContent=m===2?
+    '已内置 '+calendarYear+' 年官方日历。其他年份按普通周末规则执行，需更新日历后才能识别调休。':'';
+}
+mode.addEventListener('change',updateMode);
 const format=n=>String(Math.floor(n/60)).padStart(2,'0')+':'+String(n%60).padStart(2,'0');
 const minutes=s=>{const p=s.split(':').map(Number);return p[0]*60+p[1]};
 async function request(options){
@@ -44,16 +67,18 @@ async function request(options){
   return r.json();
 }
 request().then(t=>{
-  morning.value=format(t.morning);night.value=format(t.night);
-  morning.disabled=night.disabled=button.disabled=false;status.textContent='已读取当前设置。';
+  mode.value=String(t.mode);calendarYear=t.calendar_year;
+  for(const k of keys){inputs[k].value=format(t[k]);inputs[k].disabled=false}
+  mode.disabled=button.disabled=false;updateMode();status.textContent='已读取当前设置。';
 }).catch(()=>status.textContent='读取失败，请确认设备已连接 Wi-Fi，然后刷新页面。');
 document.getElementById('form').addEventListener('submit',async e=>{
   e.preventDefault();button.disabled=true;status.textContent='正在保存…';
-  const times={morning:minutes(morning.value),night:minutes(night.value)};
+  const times={mode:Number(mode.value)};
+  for(const k of keys)times[k]=minutes(inputs[k].value||inputs[k.replace('rest_','work_')].value);
   try{
     const saved=await request({method:'POST',headers:{'Content-Type':'application/json','X-Flower-Token':token},body:JSON.stringify(times)});
-    status.textContent='已保存：早安 '+format(saved.morning)+'，晚安 '+format(saved.night)+'。\n'+
-      (saved.morning===saved.night?'免打扰和自动早晚安已关闭。':'下次到达设置时间时播放，不补播已过去的时间。');
+    mode.value=String(saved.mode);for(const k of keys)inputs[k].value=format(saved[k]);updateMode();
+    status.textContent='已保存。按所选规则执行两套时间，下次到达对应时间时播放，不补播已过去的时间。';
   }catch{status.textContent='未确认保存成功，请刷新页面核对后重试。'}
   finally{button.disabled=false}
 });
@@ -168,7 +193,7 @@ esp_err_t TimeConfigWeb::Serve(httpd_req_t* request) {
             Reply(request, "403 Forbidden", "请刷新设置页面后重试。");
             return ESP_FAIL;
         }
-        if (request->content_len == 0 || request->content_len > 128) {
+        if (request->content_len == 0 || request->content_len > 192) {
             Reply(request, "400 Bad Request", "时间设置格式无效。");
             return ESP_FAIL;
         }
@@ -190,25 +215,31 @@ esp_err_t TimeConfigWeb::Serve(httpd_req_t* request) {
             flat && body.find('\0') == std::string::npos
                 ? cJSON_ParseWithLengthOpts(body.c_str(), body.size() + 1, nullptr, true)
                 : nullptr);
-        auto minute = [&root](const char* key) -> int {
+        auto integer = [&root](const char* key, int maximum) -> int {
             const auto* item = cJSON_GetObjectItemCaseSensitive(root.get(), key);
             return cJSON_IsNumber(item) && item->valuedouble == item->valueint &&
-                           item->valueint >= 0 && item->valueint < 1440
+                           item->valueint >= 0 && item->valueint <= maximum
                        ? item->valueint
                        : -1;
         };
-        GreetingTimes times{minute("morning"), minute("night")};
-        if (!root || !cJSON_IsObject(root.get()) || cJSON_GetArraySize(root.get()) != 2 ||
-            !ValidTimes(times)) {
+        GreetingSchedule schedule{static_cast<CalendarMode>(integer("mode", 2)),
+                                  {integer("work_morning", 1439), integer("work_night", 1439)},
+                                  {integer("rest_morning", 1439), integer("rest_night", 1439)}};
+        if (!root || !cJSON_IsObject(root.get()) || cJSON_GetArraySize(root.get()) != 5 ||
+            !ValidSchedule(schedule)) {
             return Reply(request, "400 Bad Request", "时间设置格式无效。");
         }
-        if (!times_.Save(times)) {
+        if (!times_.SaveSchedule(schedule)) {
             return Reply(request, "500 Internal Server Error", "保存失败，原设置保持有效。");
         }
     }
-    const auto times = times_.Get();
-    char json[64];
-    std::snprintf(json, sizeof(json), "{\"morning\":%d,\"night\":%d}", times.morning, times.night);
+    const auto schedule = times_.GetSchedule();
+    char json[192];
+    std::snprintf(json, sizeof(json),
+                  "{\"mode\":%d,\"work_morning\":%d,\"work_night\":%d,"
+                  "\"rest_morning\":%d,\"rest_night\":%d,\"calendar_year\":%d}",
+                  static_cast<int>(schedule.mode), schedule.workday.morning, schedule.workday.night,
+                  schedule.restday.morning, schedule.restday.night, kChinaCalendarYear);
     httpd_resp_set_type(request, "application/json");
     return httpd_resp_send(request, json, HTTPD_RESP_USE_STRLEN);
 }
