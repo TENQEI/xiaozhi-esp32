@@ -1,0 +1,349 @@
+{
+  "version": 1,
+  "format": {
+    "codec": "opus",
+    "channels": 1,
+    "sample_rate": 16000,
+    "bitrate": 16000
+  },
+  "automatic_enabled": true,
+  "placeholder_duration_s": 0.4,
+  "audio": [
+    {
+      "id": "CLOCK_01",
+      "category": "clock",
+      "file": "clock_01.ogg",
+      "expected_duration_s": 10,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "CLOCK_02",
+      "category": "clock",
+      "file": "clock_02.ogg",
+      "expected_duration_s": 10,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "CLOCK_03",
+      "category": "clock",
+      "file": "clock_03.ogg",
+      "expected_duration_s": 10,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "CLOCK_04",
+      "category": "clock",
+      "file": "clock_04.ogg",
+      "expected_duration_s": 10,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "CLOCK_05",
+      "category": "clock",
+      "file": "clock_05.ogg",
+      "expected_duration_s": 10,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "CLOCK_06",
+      "category": "clock",
+      "file": "clock_06.ogg",
+      "expected_duration_s": 10,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "CLOCK_07",
+      "category": "clock",
+      "file": "clock_07.ogg",
+      "expected_duration_s": 10,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "CLOCK_08",
+      "category": "clock",
+      "file": "clock_08.ogg",
+      "expected_duration_s": 10,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "CLOCK_09",
+      "category": "clock",
+      "file": "clock_09.ogg",
+      "expected_duration_s": 10,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "CLOCK_10",
+      "category": "clock",
+      "file": "clock_10.ogg",
+      "expected_duration_s": 10,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "CLOCK_11",
+      "category": "clock",
+      "file": "clock_11.ogg",
+      "expected_duration_s": 10,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "CLOCK_12",
+      "category": "clock",
+      "file": "clock_12.ogg",
+      "expected_duration_s": 10,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "GREETING_MORNING",
+      "category": "greeting",
+      "file": "greeting_morning.ogg",
+      "expected_duration_s": 5,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "GREETING_NIGHT",
+      "category": "greeting",
+      "file": "greeting_night.ogg",
+      "expected_duration_s": 5,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "PHRASE_AFTERNOON_01",
+      "category": "phrase_afternoon",
+      "file": "phrase_afternoon_01.ogg",
+      "expected_duration_s": 5,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "PHRASE_AFTERNOON_02",
+      "category": "phrase_afternoon",
+      "file": "phrase_afternoon_02.ogg",
+      "expected_duration_s": 5,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "PHRASE_AFTERNOON_03",
+      "category": "phrase_afternoon",
+      "file": "phrase_afternoon_03.ogg",
+      "expected_duration_s": 5,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "PHRASE_AFTERNOON_04",
+      "category": "phrase_afternoon",
+      "file": "phrase_afternoon_04.ogg",
+      "expected_duration_s": 5,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "PHRASE_ANYTIME_01",
+      "category": "phrase_anytime",
+      "file": "phrase_anytime_01.ogg",
+      "expected_duration_s": 5,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "PHRASE_ANYTIME_02",
+      "category": "phrase_anytime",
+      "file": "phrase_anytime_02.ogg",
+      "expected_duration_s": 5,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "PHRASE_ANYTIME_03",
+      "category": "phrase_anytime",
+      "file": "phrase_anytime_03.ogg",
+      "expected_duration_s": 5,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "PHRASE_ANYTIME_04",
+      "category": "phrase_anytime",
+      "file": "phrase_anytime_04.ogg",
+      "expected_duration_s": 5,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "PHRASE_ANYTIME_05",
+      "category": "phrase_anytime",
+      "file": "phrase_anytime_05.ogg",
+      "expected_duration_s": 5,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "PHRASE_ANYTIME_06",
+      "category": "phrase_anytime",
+      "file": "phrase_anytime_06.ogg",
+      "expected_duration_s": 5,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "PHRASE_ANYTIME_07",
+      "category": "phrase_anytime",
+      "file": "phrase_anytime_07.ogg",
+      "expected_duration_s": 5,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "PHRASE_ANYTIME_08",
+      "category": "phrase_anytime",
+      "file": "phrase_anytime_08.ogg",
+      "expected_duration_s": 5,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "PHRASE_ANYTIME_09",
+      "category": "phrase_anytime",
+      "file": "phrase_anytime_09.ogg",
+      "expected_duration_s": 5,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "PHRASE_ANYTIME_10",
+      "category": "phrase_anytime",
+      "file": "phrase_anytime_10.ogg",
+      "expected_duration_s": 5,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "PHRASE_EVENING_01",
+      "category": "phrase_evening",
+      "file": "phrase_evening_01.ogg",
+      "expected_duration_s": 5,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "PHRASE_EVENING_02",
+      "category": "phrase_evening",
+      "file": "phrase_evening_02.ogg",
+      "expected_duration_s": 5,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "PHRASE_EVENING_03",
+      "category": "phrase_evening",
+      "file": "phrase_evening_03.ogg",
+      "expected_duration_s": 5,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "PHRASE_EVENING_04",
+      "category": "phrase_evening",
+      "file": "phrase_evening_04.ogg",
+      "expected_duration_s": 5,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "PHRASE_MORNING_01",
+      "category": "phrase_morning",
+      "file": "phrase_morning_01.ogg",
+      "expected_duration_s": 5,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "PHRASE_MORNING_02",
+      "category": "phrase_morning",
+      "file": "phrase_morning_02.ogg",
+      "expected_duration_s": 5,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "PHRASE_MORNING_03",
+      "category": "phrase_morning",
+      "file": "phrase_morning_03.ogg",
+      "expected_duration_s": 5,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "PHRASE_MORNING_04",
+      "category": "phrase_morning",
+      "file": "phrase_morning_04.ogg",
+      "expected_duration_s": 5,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "SESSION_END_01",
+      "category": "session_end",
+      "file": "session_end_01.ogg",
+      "expected_duration_s": 5,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "SESSION_END_02",
+      "category": "session_end",
+      "file": "session_end_02.ogg",
+      "expected_duration_s": 5,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "SESSION_END_03",
+      "category": "session_end",
+      "file": "session_end_03.ogg",
+      "expected_duration_s": 5,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "SESSION_START_01",
+      "category": "session_start",
+      "file": "session_start_01.ogg",
+      "expected_duration_s": 5,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "SESSION_START_02",
+      "category": "session_start",
+      "file": "session_start_02.ogg",
+      "expected_duration_s": 5,
+      "enabled": true,
+      "placeholder": true
+    },
+    {
+      "id": "SESSION_START_03",
+      "category": "session_start",
+      "file": "session_start_03.ogg",
+      "expected_duration_s": 5,
+      "enabled": true,
+      "placeholder": true
+    }
+  ]
+}

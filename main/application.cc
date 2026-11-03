@@ -198,6 +198,7 @@ void Application::Run() {
         auto bits = xEventGroupWaitBits(event_group_, ALL_EVENTS, pdTRUE, pdFALSE, portMAX_DELAY);
 
         if (bits & MAIN_EVENT_ERROR) {
+            CancelConversation();
             if (GetDeviceState() == kDeviceStateNotifying) {
                 StopNotification();
             }
@@ -283,6 +284,7 @@ void Application::Run() {
 
         if (bits & MAIN_EVENT_CLOCK_TICK) {
             clock_ticks_++;
+            Board::GetInstance().OnClockTick();
             auto display = Board::GetInstance().GetDisplay();
             display->UpdateStatusBar();
 
@@ -328,6 +330,7 @@ void Application::HandleNetworkConnectedEvent() {
 }
 
 void Application::HandleNetworkDisconnectedEvent() {
+    CancelConversation();
     // Close current conversation when network disconnected
     auto state = GetDeviceState();
     if (state == kDeviceStateNotifying) {
@@ -594,11 +597,7 @@ void Application::InitializeProtocol() {
 
     protocol_->OnAudioChannelClosed([this, &board]() {
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
-        Schedule([this]() {
-            auto display = Board::GetInstance().GetDisplay();
-            display->SetChatMessage("system", "");
-            SetDeviceState(kDeviceStateIdle);
-        });
+        Schedule([this]() { HandleAudioChannelClosed(); });
     });
 
     protocol_->OnIncomingJson([this, display](const cJSON* root) {
@@ -804,6 +803,15 @@ void Application::StopListening() { xEventGroupSetBits(event_group_, MAIN_EVENT_
 
 void Application::HandleToggleChatEvent() {
     auto state = GetDeviceState();
+    if (session_.IsClosing())
+        return;
+    if (session_sound_pending_) {
+        CancelConversation();
+        if (protocol_)
+            protocol_->CloseAudioChannel();
+        SetDeviceState(kDeviceStateIdle);
+        return;
+    }
 
     if (state == kDeviceStateNotifying) {
         StopNotification();
@@ -836,10 +844,11 @@ void Application::HandleToggleChatEvent() {
             Schedule([this, mode]() { ContinueOpenAudioChannel(mode); });
             return;
         }
-        SetListeningMode(mode);
+        BeginConversation(mode, [this, mode]() { SetListeningMode(mode); });
     } else if (state == kDeviceStateSpeaking) {
         AbortSpeaking(kAbortReasonNone);
     } else if (state == kDeviceStateListening) {
+        session_.RequestEnd();
         protocol_->CloseAudioChannel();
     }
 }
@@ -863,7 +872,7 @@ void Application::ContinueOpenAudioChannel(ListeningMode mode) {
         }
     }
 
-    SetListeningMode(mode);
+    BeginConversation(mode, [this, mode]() { SetListeningMode(mode); });
 }
 
 void Application::HandleStartListeningEvent() {
@@ -1000,25 +1009,117 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
         }
     }
 
-    ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
+    BeginConversation(GetDefaultListeningMode(), [this, wake_word]() {
+        ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
 #if CONFIG_SEND_WAKE_WORD_DATA
-    // Encode and send the wake word data to the server
-    while (auto packet = audio_service_.PopWakeWordPacket()) {
-        protocol_->SendAudio(std::move(packet));
-    }
-    // Set the chat state to wake word detected
-    protocol_->SendWakeWordDetected(wake_word);
-    SetListeningMode(GetDefaultListeningMode());
+        // Encode and send the wake word data to the server
+        while (auto packet = audio_service_.PopWakeWordPacket()) {
+            protocol_->SendAudio(std::move(packet));
+        }
+        // Set the chat state to wake word detected
+        protocol_->SendWakeWordDetected(wake_word);
+        SetListeningMode(GetDefaultListeningMode());
 #else
     // Set flag to play popup sound after state changes to listening
     // (PlaySound here would be cleared by ResetDecoder in EnableVoiceProcessing)
     play_popup_on_listening_ = true;
     SetListeningMode(GetDefaultListeningMode());
 #endif
+    });
+}
+
+void Application::BeginConversation(ListeningMode mode, std::function<void()> ready) {
+    if (mode == kListeningModeManualStop || !session_.Begin()) {
+        ready();
+        return;
+    }
+    auto& board = Board::GetInstance();
+    const auto sound = board.GetSessionSound(true);
+    if (sound.size() < 4 || sound.size() > NotifyPlayer::kMaxLocalAudioBytes ||
+        std::memcmp(sound.data(), "OggS", 4) != 0 || notify_player_.IsBusy() ||
+        !audio_service_.IsPlaybackIdle()) {
+        ready();
+        return;
+    }
+    if (GetDeviceState() == kDeviceStateIdle && !SetDeviceState(kDeviceStateConnecting)) {
+        session_.Cancel();
+        return;
+    }
+    if (GetDeviceState() != kDeviceStateConnecting) {
+        session_.Cancel();
+        return;
+    }
+    audio_service_.EnableVoiceProcessing(false);
+    audio_service_.EnableWakeWordDetection(false);
+    audio_service_.ResetDecoder();
+    session_sound_pending_ = true;
+    session_sound_continuation_ = std::move(ready);
+    uint32_t id = ++notification_playback_id_;
+    if (id == 0)
+        id = ++notification_playback_id_;
+    auto finished = [this](uint32_t completed, bool success) {
+        Schedule([this, completed, success]() {
+            if (!session_sound_pending_ || completed != notification_playback_id_ ||
+                GetDeviceState() != kDeviceStateConnecting)
+                return;
+            session_sound_pending_ = false;
+            suppress_next_popup_ = success;
+            auto continuation = std::move(session_sound_continuation_);
+            if (protocol_ && protocol_->IsAudioChannelOpened() && continuation)
+                continuation();
+            else {
+                session_.Cancel();
+                SetDeviceState(kDeviceStateIdle);
+            }
+        });
+    };
+    if (notify_player_.StartLocal(std::string(sound), id, std::move(finished))) {
+        board.OnSessionSoundStarted(true);
+    } else {
+        session_sound_pending_ = false;
+        auto continuation = std::move(session_sound_continuation_);
+        if (continuation)
+            continuation();
+    }
+}
+
+void Application::CancelSessionSound() {
+    if (session_sound_pending_) {
+        session_sound_pending_ = false;
+        ++notification_playback_id_;  // Invalidate already queued completion callbacks.
+        notify_player_.Stop();
+        audio_service_.ResetDecoder();
+    }
+    session_sound_continuation_ = {};
+    suppress_next_popup_ = false;
+}
+
+void Application::CancelConversation() {
+    session_.Cancel();
+    CancelSessionSound();
+}
+
+void Application::HandleAudioChannelClosed() {
+    const bool normal_end = session_.Closed();
+    CancelSessionSound();
+    const auto state = GetDeviceState();
+    // A delayed/duplicate close must not replace maintenance UI or interrupt
+    // an end cue/local notification already playing after the channel closed.
+    if (state != kDeviceStateIdle && state != kDeviceStateConnecting &&
+        state != kDeviceStateListening && state != kDeviceStateSpeaking)
+        return;
+    auto& board = Board::GetInstance();
+    board.GetDisplay()->SetChatMessage("system", "");
+    SetDeviceState(kDeviceStateIdle);
+    if (normal_end && last_error_message_.empty() && PlayLocalAudio(board.GetSessionSound(false))) {
+        board.OnSessionSoundStarted(false);
+    }
 }
 
 void Application::HandleStateChangedEvent() {
     DeviceState new_state = state_machine_.GetState();
+    if (session_sound_pending_ && new_state != kDeviceStateConnecting)
+        CancelConversation();
     clock_ticks_ = 0;
     // Any state change invalidates a pending deferred listening start;
     // the Listening case below re-arms it when needed.
@@ -1177,8 +1278,10 @@ void Application::StartListeningAudio() {
     // Play popup sound after ResetDecoder (in EnableVoiceProcessing) has been called
     if (play_popup_on_listening_) {
         play_popup_on_listening_ = false;
-        audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
+        if (!suppress_next_popup_)
+            audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
     }
+    suppress_next_popup_ = false;
 }
 
 void Application::ConfigureWakeWordForListening() {
@@ -1191,10 +1294,34 @@ void Application::ConfigureWakeWordForListening() {
 #endif
 }
 
-void Application::StartNotification(std::string audio_url, std::vector<NotifySubtitle> subtitles) {
+bool Application::PlayLocalNotification(const std::string& asset_name) {
+    if (GetDeviceState() != kDeviceStateIdle || notify_player_.IsBusy() ||
+        !audio_service_.IsPlaybackIdle()) {
+        return false;
+    }
+    void* data = nullptr;
+    size_t size = 0;
+    if (!Assets::GetInstance().GetAssetData(asset_name, data, size) || data == nullptr ||
+        size < 4 || size > NotifyPlayer::kMaxLocalAudioBytes || std::memcmp(data, "OggS", 4) != 0) {
+        ESP_LOGW(TAG, "Local notification asset missing or invalid: %s", asset_name.c_str());
+        return false;
+    }
+    return PlayLocalAudio(std::string_view(static_cast<const char*>(data), size));
+}
+
+bool Application::PlayLocalAudio(std::string_view ogg) {
+    if (GetDeviceState() != kDeviceStateIdle || notify_player_.IsBusy() ||
+        !audio_service_.IsPlaybackIdle() || ogg.size() < 4 ||
+        ogg.size() > NotifyPlayer::kMaxLocalAudioBytes || std::memcmp(ogg.data(), "OggS", 4) != 0)
+        return false;
+    return StartNotification({}, {}, std::string(ogg));
+}
+
+bool Application::StartNotification(std::string audio_url, std::vector<NotifySubtitle> subtitles,
+                                    std::string local_audio) {
     if (GetDeviceState() != kDeviceStateIdle || notify_player_.IsBusy()) {
         ESP_LOGW(TAG, "Ignoring notify message while device is busy");
-        return;
+        return false;
     }
 
     auto& board = Board::GetInstance();
@@ -1208,7 +1335,7 @@ void Application::StartNotification(std::string audio_url, std::vector<NotifySub
 
     if (!SetDeviceState(kDeviceStateNotifying)) {
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
-        return;
+        return false;
     }
 
     audio_service_.ResetDecoder();
@@ -1216,25 +1343,31 @@ void Application::StartNotification(std::string audio_url, std::vector<NotifySub
     if (playback_id == 0) {
         playback_id = ++notification_playback_id_;
     }
-    audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
+    if (local_audio.empty()) {
+        audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
+    }
 
-    bool started = notify_player_.Start(
-        std::move(audio_url), std::move(subtitles), playback_id,
-        [this](uint32_t id, const std::string& text) {
-            Schedule([this, id, text]() {
-                if (GetDeviceState() == kDeviceStateNotifying && notification_playback_id_ == id) {
-                    Board::GetInstance().GetDisplay()->SetChatMessage("assistant", text.c_str());
-                }
-            });
-        },
-        [this](uint32_t id, bool success) {
-            Schedule([this, id, success]() { HandleNotificationFinished(id, success); });
+    auto subtitle_callback = [this](uint32_t id, const std::string& text) {
+        Schedule([this, id, text]() {
+            if (GetDeviceState() == kDeviceStateNotifying && notification_playback_id_ == id) {
+                Board::GetInstance().GetDisplay()->SetChatMessage("assistant", text.c_str());
+            }
         });
+    };
+    auto finished_callback = [this](uint32_t id, bool success) {
+        Schedule([this, id, success]() { HandleNotificationFinished(id, success); });
+    };
+    bool started =
+        local_audio.empty()
+            ? notify_player_.Start(std::move(audio_url), std::move(subtitles), playback_id,
+                                   std::move(subtitle_callback), finished_callback)
+            : notify_player_.StartLocal(std::move(local_audio), playback_id, finished_callback);
 
     if (!started) {
         ESP_LOGE(TAG, "Failed to start notification playback");
         StopNotification();
     }
+    return started;
 }
 
 void Application::StopNotification() {
@@ -1283,6 +1416,7 @@ ListeningMode Application::GetDefaultListeningMode() const {
 }
 
 void Application::Reboot() {
+    CancelConversation();
     ESP_LOGI(TAG, "Rebooting...");
     if (GetDeviceState() == kDeviceStateNotifying) {
         StopNotification();
@@ -1299,6 +1433,7 @@ void Application::Reboot() {
 }
 
 bool Application::UpgradeFirmware(const std::string& url, const std::string& version) {
+    CancelConversation();
     auto& board = Board::GetInstance();
     auto display = board.GetDisplay();
 
@@ -1454,6 +1589,7 @@ void Application::PlaySound(const std::string_view& sound) { audio_service_.Play
 
 void Application::ResetProtocol() {
     Schedule([this]() {
+        CancelConversation();
         if (GetDeviceState() == kDeviceStateNotifying) {
             StopNotification();
         }
