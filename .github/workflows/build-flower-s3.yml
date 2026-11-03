@@ -8,13 +8,15 @@ on:
       - main/boards/flower-s3/**
       - main/application.*
       - main/notify/**
+      - main/audio/session_lifecycle.h
+      - main/assets/flower/**
+      - scripts/gen_flower_audio.py
+      - scripts/generate_flower_placeholders.py
+      - scripts/verify_flower_firmware.py
+      - scripts/tests/test_flower_*.py
       - main/boards/common/board.h
       - main/CMakeLists.txt
       - scripts/prepare_flower_chimes.py
-      - scripts/tests/test_flower_chime.py
-      - scripts/tests/test_flower_random.py
-      - scripts/tests/test_flower_web.py
-      - scripts/tests/test_flower_calendar.py
       - scripts/tests/test_notify_player.py
       - .github/workflows/build-flower-s3.yml
 
@@ -32,6 +34,8 @@ jobs:
       image: espressif/idf:release-v6.1
     steps:
       - uses: actions/checkout@v7
+      - name: Install audio validation tools
+        run: apt-get update && apt-get install -y --no-install-recommends ffmpeg g++ binutils libcjson-dev libmbedtls-dev
       - name: Test build tooling
         run: python -m unittest discover -s scripts/tests -v
       - name: Build Chinese firmware with voice wake-up
@@ -39,6 +43,11 @@ jobs:
         run: |
           source "$IDF_PATH/export.sh"
           python scripts/build.py flower-s3 --name flower-s3 --language zh-CN --zip
+      - name: Verify embedded audio symbols and actual OTA budget
+        shell: bash
+        run: |
+          source "$IDF_PATH/export.sh"
+          python scripts/verify_flower_firmware.py
       - name: Test time schedules and calendar with SDK cJSON
         run: python -m unittest discover -s scripts/tests -p 'test_flower_*.py' -v
       - name: Upload flashable firmware
@@ -46,32 +55,32 @@ jobs:
         with:
           name: flower-s3-zh-CN-${{ github.sha }}
           path: |
+            build/flower-audio-report.json
+            build/xiaozhi.bin
             build/merged-binary.bin
             releases/*_flower-s3.zip
           if-no-files-found: error
-      - name: Build combined chime, greeting and random phrase test packs
+      - name: Build long audio budget fixture
         shell: bash
         run: |
           source "$IDF_PATH/export.sh"
-          python - <<'PY'
+          mkdir -p build/ci-flower
+          python - <<'PYCODE'
+          import json
           from pathlib import Path
-          import shutil
-          root = Path("build/ci-chimes")
-          root.mkdir(parents=True, exist_ok=True)
-          for hour in range(24):
-              shutil.copyfile("main/assets/locales/zh-CN/1.ogg", root / f"{hour:02d}.ogg")
-          (root / "chime-config.json").write_text('{"enabled":false,"quiet_start":20,"quiet_end":8}')
-          phrases = Path("build/ci-phrases")
-          phrases.mkdir(parents=True, exist_ok=True)
-          for group in ("common", "morning", "afternoon", "evening"):
-              folder = phrases / group
-              folder.mkdir(exist_ok=True)
-              for index in range(4):
-                  shutil.copyfile(f"main/assets/locales/zh-CN/{index}.ogg", folder / f"phrase-{index}.ogg")
-          greetings = Path("build/ci-greetings")
-          greetings.mkdir(parents=True, exist_ok=True)
-          for name in ("good_morning", "good_night"):
-              shutil.copyfile("main/assets/locales/zh-CN/1.ogg", greetings / f"{name}.ogg")
-          PY
-          idf.py -D FLOWER_CHIME_SOURCE_DIR="$PWD/build/ci-chimes" -D FLOWER_RANDOM_SOURCE_DIR="$PWD/build/ci-phrases" -D FLOWER_GREETING_SOURCE_DIR="$PWD/build/ci-greetings" reconfigure
+          manifest = json.loads(Path("main/assets/flower/audio_manifest.json").read_text())
+          for item in manifest["audio"]:
+              item["placeholder"] = True
+          Path("build/ci-flower/audio_manifest.json").write_text(json.dumps(manifest))
+          PYCODE
+          python scripts/generate_flower_placeholders.py --manifest build/ci-flower/audio_manifest.json --expected-duration
+          idf.py -D FLOWER_AUDIO_SOURCE_DIR="$PWD/build/ci-flower" reconfigure
           idf.py build
+          python scripts/verify_flower_firmware.py --manifest build/ci-flower/audio_manifest.json --output build/flower-long-audio-report.json
+      - name: Upload validation reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: flower-s3-validation-${{ github.sha }}
+          path: build/flower*-audio-report.json
+          if-no-files-found: warn

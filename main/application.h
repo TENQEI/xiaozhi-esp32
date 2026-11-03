@@ -14,12 +14,13 @@
 #include <cstdint>
 #include <vector>
 
-#include "protocol.h"
-#include "ota.h"
+#include "audio/session_lifecycle.h"
 #include "audio_service.h"
 #include "device_state.h"
 #include "device_state_machine.h"
 #include "notify/notify_player.h"
+#include "ota.h"
+#include "protocol.h"
 
 // Main event bits
 #define MAIN_EVENT_SCHEDULE             (1 << 0)
@@ -119,6 +120,8 @@ public:
     void PlaySound(const std::string_view& sound);
     // Application-task only; bounded, cancellable playback of a local asset.
     bool PlayLocalNotification(const std::string& asset_name);
+    // Application-task only; the input is copied into the bounded async player.
+    bool PlayLocalAudio(std::string_view ogg);
     AudioService& GetAudioService() { return audio_service_; }
     
     /**
@@ -146,6 +149,10 @@ private:
     AudioService audio_service_;
     NotifyPlayer notify_player_;
     uint32_t notification_playback_id_ = 0;
+    SessionLifecycle session_;
+    bool session_sound_pending_ = false;
+    bool suppress_next_popup_ = false;
+    std::function<void()> session_sound_continuation_;
     std::unique_ptr<Ota> ota_;
 
     std::function<void(const std::string&)> mcp_broadcast_callback_;
@@ -173,6 +180,10 @@ private:
     void ContinueOpenAudioChannel(ListeningMode mode);
     void BeginWakeWordInvoke(const std::string& wake_word);
     void ContinueWakeWordInvoke(const std::string& wake_word);
+    void BeginConversation(ListeningMode mode, std::function<void()> ready);
+    void CancelSessionSound();
+    void CancelConversation();
+    void HandleAudioChannelClosed();
     void StartListeningAudio();
     void ConfigureWakeWordForListening();
     void ShowStartupWakeWordHint();

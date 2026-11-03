@@ -1,163 +1,65 @@
-"""Run the real random phrase player with clock, assets and application doubles."""
-
-import os
-import shlex
-import shutil
-import subprocess
-import tempfile
-import unittest
+"""Exercise the real embedded Flower manager with a deterministic clock/random source."""
+import os, shlex, subprocess, tempfile, unittest
 from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[2]
-BOARD = ROOT / "main/boards/flower-s3"
-
+ROOT=Path(__file__).resolve().parents[2]
+BOARD=ROOT/'main/boards/flower-s3'
 
 class FlowerRandomPlayerTest(unittest.TestCase):
-    def test_grouped_playback_boundaries_unsynced_legacy_and_invalid_manifests(self):
+    def test_embedded_groups_sessions_and_failed_playback(self):
         with tempfile.TemporaryDirectory() as directory:
-            build = Path(directory)
-            compiler = shlex.split(os.environ.get("CXX", "c++"))
-            flags = shlex.split(os.environ.get("FLOWER_CJSON_CFLAGS", "-I/usr/include/cjson"))
-            libs = shlex.split(os.environ.get("FLOWER_CJSON_LIBS", "-lcjson"))
-            probe = subprocess.run(compiler + ["-x", "c++", "-", *flags, *libs,
-                                               "-o", str(build / "probe")],
-                                   input="#include <cJSON.h>\nint main(){cJSON_Delete(cJSON_CreateObject());}",
-                                   text=True, capture_output=True)
-            if probe.returncode:
-                cjson = ROOT / "managed_components/espressif__cjson/cJSON"
-                cc = shlex.split(os.environ.get("CC", "cc"))
-                if not (cjson / "cJSON.c").is_file() or not shutil.which(cc[0]):
-                    self.skipTest("requires cJSON development files or the ESP-IDF cJSON component")
-                flags = [f"-I{cjson}"]
-                obj = build / "cjson.o"
-                subprocess.run(cc + ["-std=c99", *flags, "-c", str(cjson / "cJSON.c"),
-                                     "-o", str(obj)], check=True)
-                libs = [str(obj), "-lm"]
-            headers = {
-                "esp_log.h": "#pragma once\n#define ESP_LOGI(...) ((void)0)\n#define ESP_LOGW(...) ((void)0)\n",
-                "esp_random.h": r'''
-                    #pragma once
-                    #include <cstdint>
-                    inline uint32_t random_value = 0;
-                    inline uint32_t esp_random() { return random_value; }
-                ''',
-                "assets.h": r'''
-                    #pragma once
-                    #include <cassert>
-                    #include <string>
-                    inline std::string manifest;
-                    class Assets {
-                    public:
-                        static Assets& GetInstance() { static Assets instance; return instance; }
-                        bool GetAssetData(const std::string& name, void*& data, size_t& size) {
-                            assert(name == "flower_random.json");
-                            data = manifest.data(); size = manifest.size(); return !manifest.empty();
-                        }
-                    };
-                ''',
-                "application.h": r'''
-                    #pragma once
-                    #include <string>
-                    constexpr int kDeviceStateIdle=0;
-                    inline bool playback_idle=true, start_playback=true;
-                    inline int state=0, play_calls=0;
-                    inline std::string last_asset;
-                    class AudioService {
-                    public:
-                        bool IsPlaybackIdle() { return playback_idle; }
-                    };
-                    class Application {
-                        AudioService audio_;
-                    public:
-                        static Application& GetInstance() { static Application app; return app; }
-                        int GetDeviceState() { return state; }
-                        AudioService& GetAudioService() { return audio_; }
-                        bool PlayLocalNotification(const std::string& name) {
-                            ++play_calls; last_asset=name; return start_playback;
-                        }
-                    };
-                ''',
-            }
-            for name, data in headers.items():
-                (build / name).write_text(data)
-            source = build / "driver.cc"
-            source.write_text(r'''
-                #include "random_phrase.h"
-                #include "application.h"
-                #include "assets.h"
-                #include "esp_random.h"
-                #include <cassert>
-                #include <cstdio>
-                #include <cstdlib>
-                inline std::time_t fake_now=0;
-                extern "C" std::time_t time(std::time_t* out) noexcept {
-                    if(out) { *out=fake_now; }
-                    return fake_now;
-                }
-                using namespace flower;
-                int main() {
-                    constexpr std::time_t day=1762041600;
-                    const std::string grouped=R"({"version":2,"count":16,"common":4,"morning":4,"afternoon":4,"evening":4})";
-                    manifest=grouped;
-                    RandomPhrasePlayer player;
-                    int previous=-1;
-                    setenv("TZ","CST-8",1); tzset(); // must not add TZ to OTA's civil clock
-                    for (int second : {6*3600-1,6*3600,12*3600-1,12*3600,18*3600-1,18*3600,86399,0}) {
-                        fake_now=day+second;
-                        int hour=second/3600, start=hour<6 || hour>=18?12:hour<12?4:8;
-                        for (int i=0;i<32;++i) {
-                            random_value=i; int before=play_calls;
-                            player.Play(); assert(play_calls==before+1);
-                            int selected=-1; assert(std::sscanf(last_asset.c_str(),"flower_random_%d.ogg",&selected)==1);
-                            assert(selected<4 || (selected>=start && selected<start+4));
-                            assert(selected!=previous); previous=selected;
-                        }
-                    }
-                    fake_now=0; // uncalibrated: common only
-                    for (int i=0;i<16;++i) {
-                        random_value=i; player.Play();
-                        int selected=-1; std::sscanf(last_asset.c_str(),"flower_random_%d.ogg",&selected);
-                        assert(selected>=0 && selected<4);
-                    }
-                    int before=play_calls;
-                    state=1; player.Play(); assert(play_calls==before); state=0;
-                    playback_idle=false; player.Play(); assert(play_calls==before); playback_idle=true;
-                    // Playback failure must not become the last successful clip.
-                    manifest=R"({"version":2,"count":2,"common":2,"morning":0,"afternoon":0,"evening":0})";
-                    RandomPhrasePlayer failures;
-                    random_value=0; failures.Play(); assert(last_asset=="flower_random_00.ogg");
-                    start_playback=false; failures.Play(); assert(last_asset=="flower_random_01.ogg");
-                    start_playback=true; failures.Play(); assert(last_asset=="flower_random_01.ogg");
-                    for (std::string legacy : {R"({"version":1,"count":2})",
-                                              R"({"version":2,"count":2,"common":0,"morning":2,"afternoon":0,"evening":0})"}) {
-                        manifest=legacy; fake_now=day+6*3600;
-                        RandomPhrasePlayer two;
-                        random_value=0; two.Play(); assert(last_asset=="flower_random_00.ogg");
-                        two.Play(); assert(last_asset=="flower_random_01.ogg");
-                    }
-                    for (std::string empty : {std::string{}, std::string(1025,'x'), std::string("{}"),
-                        std::string(R"({"version":2,"count":4,"common":0,"morning":4,"afternoon":0,"evening":0})")}) {
-                        manifest=empty; fake_now=0; RandomPhrasePlayer common_only;
-                        before=play_calls; common_only.Play(); assert(play_calls==before);
-                    }
-                    for (const char* invalid : {
-                        "null", "[]", R"({"version":3,"count":1})", R"({"version":1,"count":65})",
-                        R"({"version":2,"count":4,"common":4})",
-                        R"({"version":2,"count":4,"common":3,"morning":0,"afternoon":0,"evening":0})",
-                        R"({"version":2,"count":4,"common":4,"morning":true,"afternoon":0,"evening":0})",
-                        R"({"version":2,"count":4,"common":4,"morning":-1,"afternoon":0,"evening":1})",
-                        R"({"version":2,"count":4,"common":4,"morning":0.5,"afternoon":0,"evening":0})"}) {
-                        manifest=invalid; fake_now=day+6*3600; RandomPhrasePlayer bad;
-                        before=play_calls; bad.Play(); assert(play_calls==before);
-                    }
-                }
-            ''')
-            subprocess.run(compiler + ["-std=c++20", "-Wall", "-Wextra", "-Werror",
-                                       f"-I{build}", f"-I{BOARD}", f"-I{ROOT / 'main'}", *flags,
-                                       str(source), str(BOARD / "random_phrase.cc"), *libs,
-                                       "-o", str(build / "test")], check=True)
-            subprocess.run([str(build / "test")], check=True)
+            folder=Path(directory)
+            (folder/'esp_random.h').write_text('#pragma once\n#include <cstdint>\ninline uint32_t value=0; inline uint32_t esp_random(){return value;}\n')
+            (folder/'application.h').write_text(r'''#pragma once
+#include <string_view>
+#include <string>
+constexpr int kDeviceStateIdle=0;
+inline bool idle=true, accepted=true;
+inline int state=0,calls=0;
+inline std::string last;
+class AudioService { public: bool IsPlaybackIdle(){return idle;} };
+class Application { AudioService audio_; public:
+static Application& GetInstance(){static Application app;return app;}
+int GetDeviceState(){return state;} AudioService& GetAudioService(){return audio_;}
+bool PlayLocalAudio(std::string_view sound){++calls;last=sound;return accepted && !sound.empty();}
+};''')
+            header=['#pragma once','#include <array>','#include <string_view>',
+                    'namespace Flower::Sounds {struct Clip{std::string_view data;int id;};',
+                    'inline constexpr bool AUTOMATIC_ENABLED=true,GREETING_MORNING_ENABLED=true,GREETING_NIGHT_ENABLED=true;',
+                    'inline constexpr std::string_view GREETING_MORNING="morning",GREETING_NIGHT="night";']
+            for group,count,offset in [('CLOCK',12,0),('PHRASE_ANYTIME',10,100),('PHRASE_MORNING',4,200),('PHRASE_AFTERNOON',4,300),('PHRASE_EVENING',4,400),('SESSION_START',3,500),('SESSION_END',3,600)]:
+                values=','.join('{"%s-%d",%d}'%(group,i,offset+i) for i in range(count))
+                header.append('inline const std::array<Clip,%d> %s{{%s}};'%(count,group,values))
+            (folder/'flower_audio_assets.h').write_text('\n'.join(header+['}']))
+            driver=folder/'test.cc'
+            driver.write_text(r'''#include "flower_audio_manager.h"
+#include "application.h"
+#include "esp_random.h"
+#include <cassert>
+#include <ctime>
+#include <cstdlib>
+inline std::time_t now=0;
+extern "C" std::time_t time(std::time_t* out) noexcept {if(out){*out=now;} return now;}
+int main(){
+flower::FlowerAudioManager manager;
+setenv("TZ","CST-8",1);tzset();
+std::string previous;
+for(int hour : {0,5,6,11,12,17,18,23}){
+now=1762041600+hour*3600;
+const std::string group=hour<6||hour>=18?"PHRASE_EVENING":hour<12?"PHRASE_MORNING":"PHRASE_AFTERNOON";
+for(int i=0;i<64;++i){value=i;manager.PlayPhrase();assert(last.starts_with("PHRASE_ANYTIME")||last.starts_with(group));assert(last!=previous);previous=last;}}
+now=0;manager.PlayPhrase();assert(last.starts_with("PHRASE_ANYTIME"));
+int before=calls;state=1;manager.PlayPhrase();assert(calls==before);state=0;
+idle=false;manager.PlayPhrase();assert(calls==before);idle=true;
+value=0;auto first=manager.SessionSound(true);manager.CommitSessionSound(true);
+auto next=manager.SessionSound(true);assert(first!=next);
+assert(manager.SessionSound(true)==next); // no commit on failed start
+manager.CommitSessionSound(true);assert(manager.SessionSound(true)!=next);
+assert(manager.SessionSound(false).starts_with("SESSION_END"));
+manager.PlayClock(11);assert(last=="CLOCK-11");assert(!manager.PlayClock(12));
+manager.PlayGreeting(true);assert(last=="morning");
+}''')
+            command=shlex.split(os.environ.get('CXX','c++'))+['-std=c++20','-Wall','-Wextra','-Werror',f'-I{folder}',f'-I{BOARD}',str(driver),str(BOARD/'flower_audio_manager.cc'),'-o',str(folder/'test')]
+            subprocess.run(command,check=True)
+            subprocess.run([str(folder/'test')],check=True)
 
-
-if __name__ == "__main__":
-    unittest.main()
+if __name__=='__main__': unittest.main()

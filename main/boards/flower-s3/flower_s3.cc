@@ -4,7 +4,6 @@
 #include "config.h"
 #include "hourly_chime.h"
 #include "led/gpio_led.h"
-#include "random_phrase.h"
 #include "time_config_web.h"
 #include "wifi_board.h"
 
@@ -14,8 +13,8 @@ class FlowerS3Board : public WifiBoard {
 private:
     Button boot_button_{BOOT_BUTTON_GPIO, false, 3000};
     flower::GreetingTimeSettings greeting_times_;
-    flower::HourlyChime hourly_chime_{greeting_times_};
-    flower::RandomPhrasePlayer random_phrases_;
+    flower::FlowerAudioManager audio_manager_;
+    flower::HourlyChime hourly_chime_{greeting_times_, audio_manager_};
     flower::TimeConfigWeb time_config_web_{greeting_times_};
 
     class FlowerAudioCodec : public NoAudioCodecSimplex {
@@ -45,11 +44,17 @@ public:
         boot_button_.OnLongPress(
             [this]() { Application::GetInstance().Schedule([this]() { EnterWifiConfigMode(); }); });
         boot_button_.OnDoubleClick([this]() {
-            Application::GetInstance().Schedule([this]() { random_phrases_.Play(); });
+            Application::GetInstance().Schedule([this]() { audio_manager_.PlayPhrase(); });
         });
     }
 
     void OnClockTick() override { hourly_chime_.Tick(); }
+    std::string_view GetSessionSound(bool starting) override {
+        return audio_manager_.SessionSound(starting);
+    }
+    void OnSessionSoundStarted(bool starting) override {
+        audio_manager_.CommitSessionSound(starting);
+    }
 
     void SetNetworkEventCallback(NetworkEventCallback callback) override {
         WifiBoard::SetNetworkEventCallback(

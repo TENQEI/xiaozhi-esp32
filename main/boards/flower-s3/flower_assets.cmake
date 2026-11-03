@@ -1,0 +1,25 @@
+# Flower is independent of Lang::Sounds and the mmap assets partition.
+if(NOT DEFINED FLOWER_AUDIO_SOURCE_DIR)
+    set(FLOWER_AUDIO_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets/flower" CACHE PATH "Flower audio source directory (CI/private build override)")
+endif()
+get_filename_component(FLOWER_AUDIO_DIR "${FLOWER_AUDIO_SOURCE_DIR}" ABSOLUTE BASE_DIR "${PROJECT_DIR}")
+set(FLOWER_AUDIO_MANIFEST "${FLOWER_AUDIO_DIR}/audio_manifest.json")
+set(FLOWER_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/flower")
+set(FLOWER_AUDIO_HEADER "${FLOWER_GENERATED_DIR}/flower_audio_assets.h")
+file(GLOB FLOWER_SOUNDS CONFIGURE_DEPENDS "${FLOWER_AUDIO_DIR}/*.ogg")
+set(FLOWER_GENERATOR "${PROJECT_DIR}/scripts/gen_flower_audio.py")
+set(FLOWER_VALIDATOR "${PROJECT_DIR}/scripts/prepare_flower_chimes.py")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${FLOWER_AUDIO_MANIFEST}" "${FLOWER_GENERATOR}" "${FLOWER_VALIDATOR}" ${FLOWER_SOUNDS})
+execute_process(COMMAND python "${FLOWER_GENERATOR}" --manifest "${FLOWER_AUDIO_MANIFEST}"
+    --output "${FLOWER_AUDIO_HEADER}" RESULT_VARIABLE FLOWER_RESULT OUTPUT_VARIABLE FLOWER_OUTPUT
+    ERROR_VARIABLE FLOWER_ERROR)
+if(NOT FLOWER_RESULT EQUAL 0)
+    message(FATAL_ERROR "${FLOWER_ERROR}")
+endif()
+message(STATUS "${FLOWER_OUTPUT}")
+add_custom_command(OUTPUT "${FLOWER_AUDIO_HEADER}"
+    COMMAND python "${FLOWER_GENERATOR}" --manifest "${FLOWER_AUDIO_MANIFEST}" --output "${FLOWER_AUDIO_HEADER}"
+    DEPENDS "${FLOWER_GENERATOR}" "${FLOWER_VALIDATOR}" "${FLOWER_AUDIO_MANIFEST}" ${FLOWER_SOUNDS}
+    VERBATIM)
+add_custom_target(flower_audio_generated DEPENDS "${FLOWER_AUDIO_HEADER}")

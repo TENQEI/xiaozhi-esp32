@@ -62,17 +62,5 @@ inline int RandomPhraseIndexForHour(uint32_t random, const PhraseCounts& counts,
     return index < 0 || index < common ? index : offset + index - common;
 }
 
-class RandomPhrasePlayer {
-public:
-    // Application-task only. Explicit button playback ignores automatic quiet hours.
-    void Play();
-
-private:
-    bool loaded_ = false;
-    PhraseCounts counts_{};
-    int previous_ = -1;
-    void LoadConfig();
-};
-
 }  // namespace flower
 #endif  // FLOWER_RANDOM_PHRASE_H_
