@@ -8,7 +8,7 @@ void HourlyChime::Tick() {
     const auto now = std::time(nullptr);
     const auto times = TimesForDate(times_.GetSchedule(), now);
     config_ = {12,
-               audio_.AutomaticEnabled(),
+               audio_.AutomaticEnabled() && times_.AnnouncementsEnabled(),
                times.night / 60,
                times.morning / 60,
                audio_.GreetingEnabled(true),

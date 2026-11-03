@@ -165,7 +165,33 @@ python scripts/generate_flower_placeholders.py
 如果希望每天相同，将两套时间设为相同值即可。
 不接入中国法定节假日及调休数据。设置保存到 NVS 后即时生效，重启保留，沿用已有 NVS 键和迁移。
 修改时间不需要重新编译、打包或替换音频。免打扰只控制自动播报，手动双击仍可播放。
-网页仅提供时间配置，不提供音频修改。
+网页提供自动播报总开关和时间配置，不提供音频修改。
+
+## 报时与早晚安总开关（MCP）
+
+新增一个总开关，同时控制整点报时、早安和晚安自动播报。默认开启；关闭后保留工作日/双休时间，
+不影响手动双击定型文、连续对话和会话起止音。切换保存到 NVS，重启保留；开启不立即播放，也不补播。
+原有时间 NVS 键和迁移逻辑不变，新开关单独保存在 `flower_time/announce_on`。
+资源清单的 `automatic_enabled` 仍为构建时总限制，需保持 `true` 才能自动播放。
+
+| 设备 MCP 工具 | 参数 | 返回 |
+| --- | --- | --- |
+| `self.flower.get_announcements` | 无 | `{"enabled": true/false}` |
+| `self.flower.set_announcements_enabled` | 必填布尔 `enabled` | 保存后的 `{"enabled": true/false}`；失败返回工具错误 |
+
+这两个工具默认对模型可见。服务端接收设备 MCP 工具后，以下说法对应同一开关：
+
+- “打开报时”“打开闹钟”：调用 `self.flower.set_announcements_enabled`，参数 `{"enabled":true}`。
+- “关闭报时”“关闭闹钟”：同一工具，参数 `{"enabled":false}`。
+- “报时打开了吗”：调用 `self.flower.get_announcements`。
+
+语义识别由服务端模型/工具路由完成；固件不硬编码 ASR 文本匹配，也不新增任意时刻闹钟。
+服务端应在收到成功结果后确认完成，不能把仅有语音回复视为设置成功。
+
+网页 `http://设备IP:8080/` 上的“启用报时与早晚安”与 MCP 使用同一设置。
+`GET /api/announcements` 查询；`POST /api/announcements` 接收 `{"enabled":true/false}`，
+沿用页面令牌、Host 和 JSON 校验。原有 `/api/times` 格式保持不变，保存时间不会重置总开关。
+关闭总开关不停止正在播放的声音，仅阻止后续自动播报；免打扰时间范围仍保留。
 
 ## 音量调节
 

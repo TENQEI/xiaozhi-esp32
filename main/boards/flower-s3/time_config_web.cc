@@ -16,7 +16,7 @@ constexpr int kPort = 8080;
 constexpr char kPage[] = R"HTML(<!doctype html>
 <html lang="zh-CN"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>早晚安时间</title>
+<title>报时与早晚安设置</title>
 <style>
 body{font:17px system-ui,sans-serif;max-width:460px;margin:48px auto;padding:0 24px;color:#222;background:#f7f7f4}
 form{background:white;border-radius:16px;padding:24px}label{display:flex;justify-content:space-between;align-items:center;margin:18px 0}
@@ -24,8 +24,11 @@ input,button{font:inherit;padding:10px;border:1px solid #aaa;border-radius:8px}b
 fieldset{border:1px solid #ddd;border-radius:8px;margin:16px 0;padding:0 12px}
 button:disabled{opacity:.5}p{line-height:1.6}#status{min-height:3em;white-space:pre-line}
 </style>
-<h1>早晚安时间</h1>
+<h1>报时与早晚安设置</h1>
 <p>使用设备校时后的本地时间。晚安后进入免打扰，早安时结束免打扰。</p>
+<label>启用报时与早晚安 <input id="announcements" type="checkbox" disabled></label>
+<p id="announcement_status" role="status" aria-live="polite">正在读取开关…</p>
+<p>关闭后停止整点报时、早安和晚安；保留时间设置，手动定型文和对话不受影响。</p>
 <form id="form">
 <p>按星期自动切换：工作日为周一至周五，双休为周六、周日。</p>
 <fieldset><legend>工作日（周一至周五）</legend>
@@ -37,7 +40,7 @@ button:disabled{opacity:.5}p{line-height:1.6}#status{min-height:3em;white-space:
 <button id="save" disabled>保存时间</button>
 </form>
 <p id="status" role="status" aria-live="polite">正在读取…</p>
-<p>保存后立即生效，重启后保留。一套时间中的早晚安相同，表示当天关闭免打扰和自动早晚安。需要已有对应音频；本页只修改时间。</p>
+<p>保存后立即生效，重启后保留。一套时间中的早晚安相同，表示当天关闭免打扰和自动早晚安。需要已有对应音频；本页可修改自动播报总开关及时间，不修改音频。</p>
 <script>
 'use strict';
 const token='@@TOKEN@@';
@@ -46,11 +49,25 @@ const inputs=Object.fromEntries(keys.map(k=>[k,document.getElementById(k)]));
 const button=document.getElementById('save'),status=document.getElementById('status');
 const format=n=>String(Math.floor(n/60)).padStart(2,'0')+':'+String(n%60).padStart(2,'0');
 const minutes=s=>{const p=s.split(':').map(Number);return p[0]*60+p[1]};
-async function request(options){
-  const r=await fetch('/api/times',{cache:'no-store',...options});
+async function request(options,url='/api/times'){
+  const r=await fetch(url,{cache:'no-store',...options});
   if(!r.ok)throw new Error(await r.text());
   return r.json();
 }
+const announcements=document.getElementById('announcements'),announcementStatus=document.getElementById('announcement_status');
+request(undefined,'/api/announcements').then(s=>{
+  announcements.checked=s.enabled;announcements.disabled=false;
+  announcementStatus.textContent=s.enabled?'报时与早晚安已打开。':'报时与早晚安已关闭。';
+}).catch(()=>announcementStatus.textContent='读取报时开关失败，请刷新页面。');
+announcements.addEventListener('change',async()=>{
+  const enabled=announcements.checked;announcements.disabled=true;
+  try{
+    const saved=await request({method:'POST',headers:{'Content-Type':'application/json','X-Flower-Token':token},body:JSON.stringify({enabled})},'/api/announcements');
+    announcements.checked=saved.enabled;
+    announcementStatus.textContent=saved.enabled?'已打开报时与早晚安，下次到点生效，不补播。':'已关闭报时与早晚安，时间设置保留。';
+  }catch{announcements.checked=!enabled;announcementStatus.textContent='未确认开关保存成功，请刷新页面核对。'}
+  finally{announcements.disabled=false}
+});
 request().then(t=>{
   for(const k of keys){inputs[k].value=format(t[k]);inputs[k].disabled=false}
   button.disabled=false;status.textContent='已读取当前设置。';
@@ -99,7 +116,7 @@ bool TimeConfigWeb::Start() {
     config.ctrl_port = 32770;  // Separate from the Wi-Fi provisioning server.
     config.stack_size = 6144;
     config.max_open_sockets = 2;
-    config.max_uri_handlers = 3;
+    config.max_uri_handlers = 5;
     config.lru_purge_enable = true;
     config.recv_wait_timeout = 3;
     config.send_wait_timeout = 3;
@@ -108,8 +125,10 @@ bool TimeConfigWeb::Start() {
         ESP_LOGW(kTag, "Cannot start time settings server");
         return false;
     }
-    for (const auto& route : {std::pair{"/", HTTP_GET}, std::pair{"/api/times", HTTP_GET},
-                              std::pair{"/api/times", HTTP_POST}}) {
+    for (const auto& route :
+         {std::pair{"/", HTTP_GET}, std::pair{"/api/times", HTTP_GET},
+          std::pair{"/api/times", HTTP_POST}, std::pair{"/api/announcements", HTTP_GET},
+          std::pair{"/api/announcements", HTTP_POST}}) {
         httpd_uri_t uri = {};
         uri.uri = route.first;
         uri.method = route.second;
@@ -199,22 +218,39 @@ esp_err_t TimeConfigWeb::Serve(httpd_req_t* request) {
             flat && body.find('\0') == std::string::npos
                 ? cJSON_ParseWithLengthOpts(body.c_str(), body.size() + 1, nullptr, true)
                 : nullptr);
-        auto integer = [&root](const char* key, int maximum) -> int {
-            const auto* item = cJSON_GetObjectItemCaseSensitive(root.get(), key);
-            return cJSON_IsNumber(item) && item->valuedouble == item->valueint &&
-                           item->valueint >= 0 && item->valueint <= maximum
-                       ? item->valueint
-                       : -1;
-        };
-        GreetingSchedule schedule{{integer("work_morning", 1439), integer("work_night", 1439)},
-                                  {integer("rest_morning", 1439), integer("rest_night", 1439)}};
-        if (!root || !cJSON_IsObject(root.get()) || cJSON_GetArraySize(root.get()) != 4 ||
-            !ValidSchedule(schedule)) {
-            return Reply(request, "400 Bad Request", "时间设置格式无效。");
+        if (std::strcmp(request->uri, "/api/announcements") == 0) {
+            const auto* enabled = cJSON_GetObjectItemCaseSensitive(root.get(), "enabled");
+            if (!root || !cJSON_IsObject(root.get()) || cJSON_GetArraySize(root.get()) != 1 ||
+                !cJSON_IsBool(enabled)) {
+                return Reply(request, "400 Bad Request", "开关设置格式无效。");
+            }
+            if (!times_.SaveAnnouncementsEnabled(cJSON_IsTrue(enabled))) {
+                return Reply(request, "500 Internal Server Error", "保存失败，原设置保持有效。");
+            }
+        } else {
+            auto integer = [&root](const char* key, int maximum) -> int {
+                const auto* item = cJSON_GetObjectItemCaseSensitive(root.get(), key);
+                return cJSON_IsNumber(item) && item->valuedouble == item->valueint &&
+                               item->valueint >= 0 && item->valueint <= maximum
+                           ? item->valueint
+                           : -1;
+            };
+            GreetingSchedule schedule{{integer("work_morning", 1439), integer("work_night", 1439)},
+                                      {integer("rest_morning", 1439), integer("rest_night", 1439)}};
+            if (!root || !cJSON_IsObject(root.get()) || cJSON_GetArraySize(root.get()) != 4 ||
+                !ValidSchedule(schedule)) {
+                return Reply(request, "400 Bad Request", "时间设置格式无效。");
+            }
+            if (!times_.SaveSchedule(schedule)) {
+                return Reply(request, "500 Internal Server Error", "保存失败，原设置保持有效。");
+            }
         }
-        if (!times_.SaveSchedule(schedule)) {
-            return Reply(request, "500 Internal Server Error", "保存失败，原设置保持有效。");
-        }
+    }
+    if (std::strcmp(request->uri, "/api/announcements") == 0) {
+        httpd_resp_set_type(request, "application/json");
+        return httpd_resp_send(
+            request, times_.AnnouncementsEnabled() ? "{\"enabled\":true}" : "{\"enabled\":false}",
+            HTTPD_RESP_USE_STRLEN);
     }
     const auto schedule = times_.GetSchedule();
     char json[192];

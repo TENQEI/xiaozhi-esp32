@@ -57,7 +57,7 @@ class FlowerWebTest(unittest.TestCase):
                     using nvs_handle_t = unsigned;
                     constexpr int NVS_READONLY = 0, NVS_READWRITE = 1;
                     inline bool fail_open = false, fail_set = false, fail_commit = false;
-                    inline std::optional<uint32_t> persisted, pending;
+                    inline std::optional<uint32_t> persisted, pending, persisted_enabled, pending_enabled;
                     inline std::vector<uint32_t> persisted_blob, legacy_blob, pending_blob;
                     inline int commits = 0;
                     inline int nvs_open(const char* ns, int, nvs_handle_t* handle) {
@@ -65,13 +65,14 @@ class FlowerWebTest(unittest.TestCase):
                         if (fail_open) return ESP_FAIL;
                         *handle = 1; return ESP_OK;
                     }
-                    inline int nvs_get_u32(nvs_handle_t, const char*, uint32_t* out) {
-                        if (!persisted) return ESP_FAIL;
-                        *out = *persisted; return ESP_OK;
+                    inline int nvs_get_u32(nvs_handle_t, const char* key, uint32_t* out) {
+                        const auto& value = std::strcmp(key, "announce_on") == 0 ? persisted_enabled : persisted;
+                        if (!value) return ESP_FAIL;
+                        *out = *value; return ESP_OK;
                     }
-                    inline int nvs_set_u32(nvs_handle_t, const char*, uint32_t value) {
+                    inline int nvs_set_u32(nvs_handle_t, const char* key, uint32_t value) {
                         if (fail_set) return ESP_FAIL;
-                        pending = value; return ESP_OK;
+                        (std::strcmp(key, "announce_on") == 0 ? pending_enabled : pending) = value; return ESP_OK;
                     }
                     inline int nvs_get_blob(nvs_handle_t, const char* key, void* out, size_t* size) {
                         auto& blob = std::strcmp(key, "schedule_v3") == 0 ? persisted_blob : legacy_blob;
@@ -88,10 +89,11 @@ class FlowerWebTest(unittest.TestCase):
                     inline int nvs_commit(nvs_handle_t) {
                         if (fail_commit) return ESP_FAIL;
                         if (pending) persisted = pending;
+                        if (pending_enabled) persisted_enabled = pending_enabled;
                         if (!pending_blob.empty()) persisted_blob = pending_blob;
                         ++commits; return ESP_OK;
                     }
-                    inline void nvs_close(nvs_handle_t) { pending.reset(); pending_blob.clear(); }
+                    inline void nvs_close(nvs_handle_t) { pending.reset(); pending_enabled.reset(); pending_blob.clear(); }
                 ''',
                 "esp_random.h": r'''
                     #pragma once
@@ -200,6 +202,31 @@ class FlowerWebTest(unittest.TestCase):
                     }
                 ''',
             }
+            headers["esp_system.h"] = '#pragma once\n#include <cstdlib>\n[[noreturn]] inline void esp_system_abort(const char*){std::abort();}\n'
+            (build / "mbedtls").mkdir()
+            (build / "mbedtls/base64.h").write_text('#pragma once\n#include <cstddef>\ninline int mbedtls_base64_encode(unsigned char*,size_t,size_t*,const unsigned char*,size_t){return -1;}\n')
+            # Use the production Property/PropertyList/McpTool implementations;
+            # only replace the registry and platform dependencies.
+            headers["mcp_server.h"] = (ROOT / "main/mcp_server.h").read_text().split('class McpServer {')[0] + r'''
+                class McpServer {
+                public:
+                    std::vector<std::unique_ptr<McpTool>> tools;
+                    static McpServer& GetInstance(){static McpServer server;return server;}
+                    void AddTool(const std::string& name,const std::string& description,
+                                 const PropertyList& properties,ToolCallback callback){
+                        tools.push_back(std::make_unique<McpTool>(name,description,properties,std::move(callback)));
+                    }
+                };
+                #endif
+            '''
+            headers["application.h"] = r'''
+                #pragma once
+                constexpr int kDeviceStateIdle=0;
+                class Application {public:
+                    static Application& GetInstance(){static Application app;return app;}
+                    int GetDeviceState(){return kDeviceStateIdle;}
+                };
+            '''
             for name, content in headers.items():
                 (build / name).write_text(content)
             source = build / "driver.cc"
@@ -207,10 +234,20 @@ class FlowerWebTest(unittest.TestCase):
                 #include "greeting_time_settings.h"
                 #include "time_config_web.h"
                 #include "chime_schedule.h"
+                #include "announcement_mcp_tools.h"
+                #include "mcp_server.h"
+                #include "hourly_chime.h"
                 #include "nvs.h"
                 #include "esp_netif.h"
                 #include <thread>
                 using namespace flower;
+                int clocks=0,greetings=0;
+                std::time_t now=0;
+                extern "C" std::time_t time(std::time_t* value) noexcept {if(value)*value=now;return now;}
+                bool FlowerAudioManager::AutomaticEnabled() const{return true;}
+                bool FlowerAudioManager::GreetingEnabled(bool) const{return true;}
+                bool FlowerAudioManager::PlayClock(int){++clocks;return true;}
+                bool FlowerAudioManager::PlayGreeting(bool){++greetings;return true;}
                 int main() {
                     GreetingTimeSettings times;
                     assert(times.Get().morning == 480 && times.Get().night == 1200);
@@ -218,6 +255,9 @@ class FlowerWebTest(unittest.TestCase):
                     assert(times.Get().morning == 540);
                     assert(!times.Save({-1, 1200}) && !times.Save({0, 1440}));
                     assert(commits == 0);
+                    assert(times.AnnouncementsEnabled());
+                    persisted_enabled=2;assert(GreetingTimeSettings().AnnouncementsEnabled());
+                    persisted_enabled.reset();
                     persisted = PackTimes({510, 1215});
                     GreetingTimeSettings legacy;
                     assert(legacy.GetSchedule().restday.morning == 510);
@@ -255,7 +295,7 @@ class FlowerWebTest(unittest.TestCase):
                     fail_start = false; fail_registration = true;
                     web.SetConnected(true); assert(routes.empty());
                     fail_registration = false; web.SetConnected(true);
-                    assert(routes.size() == 3);
+                    assert(routes.size() == 5);
                     const int started = server_starts;
                     web.SetConnected(true); assert(server_starts == started);
                     auto page = Send(HTTP_GET, "/");
@@ -320,6 +360,60 @@ class FlowerWebTest(unittest.TestCase):
                     assert(Send(HTTP_GET, "/").status == "403 Forbidden");
                     assert(Send(HTTP_GET, "/", "", "", "192.168.50.13:8080").status == "200 OK");
 
+                    // MCP and HTTP share the same persisted master switch.
+                    InitializeAnnouncementTools(times);
+                    auto& tools=McpServer::GetInstance().tools;
+                    assert(tools.size()==2 && !tools[0]->user_only() && !tools[1]->user_only());
+                    assert(tools[0]->name()=="self.flower.get_announcements");
+                    assert(tools[1]->name()=="self.flower.set_announcements_enabled");
+                    auto schema=tools[1]->to_json();
+                    assert(schema.find("enabled")!=std::string::npos);
+                    CJsonUniquePtr declared(cJSON_Parse(schema.c_str()));
+                    auto* input=cJSON_GetObjectItem(declared.get(),"inputSchema");
+                    auto* properties=cJSON_GetObjectItem(input,"properties");
+                    auto* field=cJSON_GetObjectItem(properties,"enabled");
+                    assert(std::strcmp(cJSON_GetObjectItem(field,"type")->valuestring,"boolean")==0);
+                    assert(std::strcmp(cJSON_GetArrayItem(cJSON_GetObjectItem(input,"required"),0)->valuestring,"enabled")==0);
+                    auto set=[&](bool value){
+                        auto args=tools[1]->properties();for(auto& property:args)assert(property.set_value<bool>(value));
+                        return tools[1]->Call(args);
+                    };
+                    assert(times.AnnouncementsEnabled());
+                    assert(set(false));assert(!times.AnnouncementsEnabled());
+                    assert(!GreetingTimeSettings().AnnouncementsEnabled());
+                    assert(Send(HTTP_GET,"/api/announcements","","","192.168.50.13:8080").response==R"({"enabled":false})");
+                    int writes=commits;assert(set(false));assert(commits==writes);
+                    for (int error=0;error<3;++error){
+                        fail_open=error==0;fail_set=error==1;fail_commit=error==2;
+                        assert(!set(true));
+                        fail_open=fail_set=fail_commit=false;
+                        assert(!times.AnnouncementsEnabled() && !GreetingTimeSettings().AnnouncementsEnabled());
+                    }
+                    assert(Send(HTTP_POST,"/api/announcements",R"({"enabled":true})",token,"192.168.50.13:8080").status=="200 OK");
+                    auto status=tools[0]->Call(PropertyList());assert(status);
+                    assert(status->find("true")!=std::string::npos && GreetingTimeSettings().AnnouncementsEnabled());
+                    for(const auto* bad : {"{}","null",R"({"enabled":0})",R"({"enabled":"false"})",R"({"enabled":true,"extra":1})",R"({"enabled":true,"enabled":false})"}){
+                        assert(Send(HTTP_POST,"/api/announcements",bad,token,"192.168.50.13:8080").status=="400 Bad Request");
+                    }
+                    assert(Send(HTTP_POST,"/api/announcements",R"({"enabled":false})","bad","192.168.50.13:8080").status=="403 Forbidden");
+                    fail_commit=true;
+                    assert(Send(HTTP_POST,"/api/announcements",R"({"enabled":false})",token,"192.168.50.13:8080").status=="500 Internal Server Error");
+                    fail_commit=false;assert(times.AnnouncementsEnabled());
+                    auto kept=times.GetSchedule();assert(set(false));
+                    assert(times.GetSchedule().workday.morning==kept.workday.morning);
+                    assert(times.SaveSchedule({{480,1200},{480,1200}}));
+                    assert(!times.AnnouncementsEnabled() && !GreetingTimeSettings().AnnouncementsEnabled());
+                    FlowerAudioManager audio;HourlyChime automatic(times,audio);
+                    for(int minute : {480,540,1200}){
+                        now=day+minute*60-1;automatic.Tick();++now;automatic.Tick();
+                    }
+                    assert(clocks==0 && greetings==0); // off covers morning, hour, night
+                    assert(set(true));automatic.Tick();assert(clocks==0 && greetings==0); // no catch-up
+                    now=day+1440*60+480*60-1;automatic.Tick();++now;automatic.Tick();
+                    assert(greetings==1 && clocks==0);
+                    now=day+1440*60+540*60-1;automatic.Tick();++now;automatic.Tick();assert(clocks==1);
+                    now=day+1440*60+1200*60-1;automatic.Tick();++now;automatic.Tick();assert(greetings==2);
+
                     // A reader sees both time pairs together, never a mixed version.
                     GreetingSchedule first{{1,2}, {3,4}};
                     GreetingSchedule second{{5,6}, {7,8}};
@@ -340,10 +434,12 @@ class FlowerWebTest(unittest.TestCase):
                     done.store(true); reader.join();
                 }
             ''')
-            subprocess.run(compiler + ["-std=c++20", "-Wall", "-Wextra", "-Werror", "-pthread",
+            subprocess.run(compiler + ["-std=c++23", "-Wall", "-Wextra", "-Werror", "-pthread",
                                        f"-I{build}", f"-I{BOARD}", f"-I{ROOT / 'main'}", *flags,
                                        str(source), str(BOARD / "greeting_time_settings.cc"),
-                                       str(BOARD / "time_config_web.cc"), *libs,
+                                       str(BOARD / "time_config_web.cc"),
+                                       str(BOARD / "announcement_mcp_tools.cc"),
+                                       str(BOARD / "hourly_chime.cc"), *libs,
                                        "-o", str(build / "test")], check=True)
             subprocess.run([str(build / "test")], check=True)
 

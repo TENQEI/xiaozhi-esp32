@@ -9,6 +9,7 @@ constexpr char kNamespace[] = "flower_time";
 constexpr char kKey[] = "schedule_v3";
 constexpr char kLegacyScheduleKey[] = "schedule_v2";
 constexpr char kLegacyKey[] = "times_v1";
+constexpr char kAnnouncementsKey[] = "announce_on";
 constexpr char kTag[] = "FlowerTime";
 }  // namespace
 
@@ -16,6 +17,10 @@ GreetingTimeSettings::GreetingTimeSettings() {
     nvs_handle_t handle;
     if (nvs_open(kNamespace, NVS_READONLY, &handle) != ESP_OK) {
         return;
+    }
+    uint32_t enabled;
+    if (nvs_get_u32(handle, kAnnouncementsKey, &enabled) == ESP_OK && enabled <= 1) {
+        announcements_enabled_ = enabled != 0;
     }
     uint32_t stored[2] = {};
     size_t size = sizeof(stored);
@@ -63,6 +68,36 @@ void GreetingTimeSettings::SetDefaults(GreetingTimes times) {
 }
 
 bool GreetingTimeSettings::Save(GreetingTimes times) { return SaveSchedule({times, times}); }
+
+bool GreetingTimeSettings::AnnouncementsEnabled() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return announcements_enabled_;
+}
+
+bool GreetingTimeSettings::SaveAnnouncementsEnabled(bool enabled) {
+    // Serialize MCP/HTTP writes so the published value follows committed order.
+    std::lock_guard<std::mutex> writer(announcement_write_mutex_);
+    if (AnnouncementsEnabled() == enabled) {
+        return true;
+    }
+    nvs_handle_t handle;
+    esp_err_t error = nvs_open(kNamespace, NVS_READWRITE, &handle);
+    if (error != ESP_OK) {
+        return false;
+    }
+    error = nvs_set_u32(handle, kAnnouncementsKey, enabled ? 1 : 0);
+    if (error == ESP_OK) {
+        error = nvs_commit(handle);
+    }
+    nvs_close(handle);
+    if (error != ESP_OK) {
+        ESP_LOGW(kTag, "Cannot save announcement switch: %s", esp_err_to_name(error));
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    announcements_enabled_ = enabled;
+    return true;
+}
 
 bool GreetingTimeSettings::SaveSchedule(const GreetingSchedule& schedule) {
     if (!ValidSchedule(schedule)) {

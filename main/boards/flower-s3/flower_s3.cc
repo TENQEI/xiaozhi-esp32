@@ -1,3 +1,4 @@
+#include "announcement_mcp_tools.h"
 #include "application.h"
 #include "button.h"
 #include "codecs/no_audio_codec.h"
@@ -17,6 +18,8 @@ private:
     flower::FlowerAudioManager audio_manager_;
     flower::HourlyChime hourly_chime_{greeting_times_, audio_manager_};
     flower::TimeConfigWeb time_config_web_{greeting_times_};
+
+    void InitializeTools() { flower::InitializeAnnouncementTools(greeting_times_); }
 
     class FlowerAudioCodec : public NoAudioCodecSimplex {
     public:
@@ -51,6 +54,7 @@ public:
                 Application::GetInstance().Schedule([this]() { audio_manager_.PlayPhrase(); });
             });
         }
+        InitializeTools();
     }
 
     void OnClockTick() override { hourly_chime_.Tick(); }
