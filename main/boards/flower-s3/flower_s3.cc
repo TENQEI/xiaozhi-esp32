@@ -12,6 +12,7 @@ namespace {
 class FlowerS3Board : public WifiBoard {
 private:
     Button boot_button_{BOOT_BUTTON_GPIO, false, 3000};
+    Button main_button_{MAIN_BUTTON_GPIO, false, 3000};
     flower::GreetingTimeSettings greeting_times_;
     flower::FlowerAudioManager audio_manager_;
     flower::HourlyChime hourly_chime_{greeting_times_, audio_manager_};
@@ -31,21 +32,25 @@ private:
 
 public:
     FlowerS3Board() {
-        boot_button_.OnClick([this]() {
-            Application::GetInstance().Schedule([this]() {
-                auto& app = Application::GetInstance();
-                if (app.GetDeviceState() == kDeviceStateStarting) {
-                    EnterWifiConfigMode();
-                    return;
-                }
-                app.ToggleChatState();
+        Button* buttons[] = {&boot_button_, &main_button_};
+        for (auto* button : buttons) {
+            button->OnClick([this]() {
+                Application::GetInstance().Schedule([this]() {
+                    auto& app = Application::GetInstance();
+                    if (app.GetDeviceState() == kDeviceStateStarting) {
+                        EnterWifiConfigMode();
+                        return;
+                    }
+                    app.ToggleChatState();
+                });
             });
-        });
-        boot_button_.OnLongPress(
-            [this]() { Application::GetInstance().Schedule([this]() { EnterWifiConfigMode(); }); });
-        boot_button_.OnDoubleClick([this]() {
-            Application::GetInstance().Schedule([this]() { audio_manager_.PlayPhrase(); });
-        });
+            button->OnLongPress([this]() {
+                Application::GetInstance().Schedule([this]() { EnterWifiConfigMode(); });
+            });
+            button->OnDoubleClick([this]() {
+                Application::GetInstance().Schedule([this]() { audio_manager_.PlayPhrase(); });
+            });
+        }
     }
 
     void OnClockTick() override { hourly_chime_.Tick(); }
