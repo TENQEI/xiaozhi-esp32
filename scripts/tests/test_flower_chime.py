@@ -158,7 +158,8 @@ class FlowerRandomPackTest(unittest.TestCase):
                     shutil.copyfile(SOUND.with_name(f"{i % 10}.ogg"), source / f"phrase-{i:02d}.ogg")
                 (source / ".ignored.ogg").write_bytes(b"metadata")
                 manifest = PREPARE.prepare_random(source, output)
-                self.assertEqual(manifest, {"version": 1, "count": count})
+                self.assertEqual(manifest, {"version": 2, "count": count,
+                                          "common": count, "morning": 0, "afternoon": 0, "evening": 0})
                 self.assertEqual(len(list(output.glob("flower_random_*.ogg"))), count)
                 for i in range(count):
                     self.assertEqual((output / f"flower_random_{i:02d}.ogg").read_bytes(),
@@ -192,6 +193,65 @@ class FlowerRandomPackTest(unittest.TestCase):
                 PREPARE.prepare_random(root / "missing", output)
             self.assertFalse(output.exists())
 
+    def test_four_phrase_groups_and_legacy_common_order(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, output = root / "phrases", root / "output"
+            source.mkdir()
+            shutil.copyfile(SOUND, source / "legacy.ogg")
+            expected = [SOUND.read_bytes()]
+            for group_index, group in enumerate(("common", "morning", "afternoon", "evening")):
+                folder = source / group
+                folder.mkdir()
+                for index in range(4):
+                    sound = SOUND.with_name(f"{group_index + index}.ogg")
+                    shutil.copyfile(sound, folder / f"{index:02d}.ogg")
+                    expected.append(sound.read_bytes())
+            manifest = PREPARE.prepare_random(source, output)
+            self.assertEqual(manifest, {"version": 2, "count": 17, "common": 5,
+                                       "morning": 4, "afternoon": 4, "evening": 4})
+            for index, data in enumerate(expected):
+                self.assertEqual((output / f"flower_random_{index:02d}.ogg").read_bytes(), data)
+            shutil.rmtree(source / "morning")
+            manifest = PREPARE.prepare_random(source, output)
+            self.assertEqual(manifest["morning"], 0)
+            self.assertEqual(manifest["count"], 13)
+            self.assertEqual(len(list(output.glob("flower_random_*.ogg"))), 13)
+            self.assertEqual(json.loads((output / "flower_random.json").read_text()), manifest)
+
+    def test_grouped_phrase_validation_and_total_limit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, output = root / "phrases", root / "output"
+            source.mkdir()
+            folder = source / "morning"
+            folder.mkdir()
+            (folder / "bad.mp3").write_bytes(b"audio")
+            with self.assertRaisesRegex(ValueError, "convert"):
+                PREPARE.prepare_random(source, output)
+            (folder / "bad.mp3").unlink()
+            (folder / "bad.ogg").write_bytes(b"audio")
+            with self.assertRaises(ValueError):
+                PREPARE.prepare_random(source, output)
+            (folder / "bad.ogg").unlink()
+            (folder / "nested").mkdir()
+            with self.assertRaisesRegex(ValueError, "nesting"):
+                PREPARE.prepare_random(source, output)
+            shutil.rmtree(folder / "nested")
+            (source / "unknown").mkdir()
+            with self.assertRaisesRegex(ValueError, "folders"):
+                PREPARE.prepare_random(source, output)
+            shutil.rmtree(source / "unknown")
+            for group in ("common", "afternoon", "evening"):
+                (source / group).mkdir()
+            for group in ("common", "morning", "afternoon", "evening"):
+                for index in range(16):
+                    shutil.copyfile(SOUND, source / group / f"{index:02d}.ogg")
+            self.assertEqual(PREPARE.prepare_random(source, output)["count"], 64)
+            shutil.copyfile(SOUND, folder / "extra.ogg")
+            with self.assertRaisesRegex(ValueError, "64"):
+                PREPARE.prepare_random(source, output)
+
 
 class FlowerScheduleTest(unittest.TestCase):
     def test_mapping_clock_jumps_quiet_boundaries_busy_hours_and_rollover(self):
@@ -216,6 +276,34 @@ class FlowerScheduleTest(unittest.TestCase):
                 assert(RandomPhraseIndex(0, 0, -1) == -1);
                 assert(RandomPhraseIndex(0, 65, -1) == -1);
                 assert(RandomPhraseIndex(UINT32_MAX, 1, 0) == 0);
+                assert(PhraseHour(0) == -1);
+                assert(PhraseHour(day + 6 * 3600 - 1) == 5);
+                assert(PhraseHour(day + 6 * 3600) == 6);
+                PhraseCounts groups{4,4,4,4};
+                for (int hour = -1; hour < 24; ++hour) {
+                    const int first = hour < 0 ? -1 : hour < 6 || hour >= 18 ? 12 : hour < 12 ? 4 : 8;
+                    for (int previous = -1; previous < 16; ++previous) {
+                        bool seen[16] = {};
+                        for (uint32_t random = 0; random < 128; ++random) {
+                            int selected = RandomPhraseIndexForHour(random, groups, hour, previous);
+                            assert(selected >= 0 && selected < 16);
+                            assert(selected < 4 || (first >= 0 && selected >= first && selected < first+4));
+                            assert(selected != previous);
+                            seen[selected] = true;
+                        }
+                        for (int i=0; i<16; ++i) {
+                            bool eligible = i < 4 || (first >= 0 && i >= first && i < first+4);
+                            assert(seen[i] == (eligible && i != previous));
+                        }
+                    }
+                }
+                assert(RandomPhraseIndexForHour(0, {0,4,4,4}, -1, -1) == -1);
+                assert(RandomPhraseIndexForHour(0, {0,0,4,4}, 6, -1) == -1);
+                assert(RandomPhraseIndexForHour(0, {1,0,0,0}, 6, 0) == 0);
+                assert(RandomPhraseIndexForHour(0, {0,1,0,0}, 6, 0) == 0);
+                assert(RandomPhraseIndexForHour(0, {0,1,0,0}, 12, -1) == -1);
+                assert(RandomPhraseIndexForHour(0, {64,1,0,0}, 6, -1) == -1);
+                assert(RandomPhraseIndexForHour(0, {-1,1,0,0}, 6, -1) == -1);
                 for (int count : {2, 3, 12, 24, 64}) {
                     for (int previous = -1; previous <= count; ++previous) {
                         bool seen[64] = {};

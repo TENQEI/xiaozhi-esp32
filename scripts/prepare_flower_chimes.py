@@ -118,18 +118,32 @@ def prepare(source, output, *, greetings=None):
 
 def prepare_random(source, output):
     output = Path(output).resolve()
-    files = []
+    groups = {name: [] for name in ("common", "morning", "afternoon", "evening")}
     if source is not None:
         source = Path(source).resolve()
         if not source.is_dir():
             raise ValueError(f"random phrase directory does not exist: {source}")
         if source == output or source in output.parents or output in source.parents:
             raise ValueError("source and staging directories must not overlap")
-        files = sorted(p for p in source.iterdir() if p.is_file() and
-                       not p.name.startswith(".") and p.suffix.lower() == ".ogg")
-        if any(p.suffix.lower() in {".wav", ".mp3", ".m4a", ".flac", ".opus"}
-               for p in source.iterdir() if p.is_file() and not p.name.startswith(".")):
-            raise ValueError("convert random phrases to mono Ogg/Opus before building")
+        for directory in (source, *(source / name for name in groups)):
+            if not directory.exists():
+                continue
+            if not directory.is_dir():
+                raise ValueError(f"random phrase group must be a directory: {directory}")
+            group = "common" if directory == source else directory.name
+            for file in sorted(directory.iterdir()):
+                if file.name.startswith("."):
+                    continue
+                if file.is_dir():
+                    if directory == source and file.name in groups:
+                        continue
+                    raise ValueError("random phrase folders must be common, morning, afternoon "
+                                     "or evening; no nesting")
+                if file.suffix.lower() in {".wav", ".mp3", ".m4a", ".flac", ".opus"}:
+                    raise ValueError("convert random phrases to mono Ogg/Opus before building")
+                if file.suffix.lower() == ".ogg":
+                    groups[group].append(file)
+    files = [file for group in groups.values() for file in group]
     if len(files) > 64:
         raise ValueError("provide at most 64 random phrase recordings")
     validate_files(files)
@@ -138,7 +152,8 @@ def prepare_random(source, output):
         old.unlink()
     for index, file in enumerate(files):
         shutil.copyfile(file, output / f"flower_random_{index:02d}.ogg")
-    manifest = {"version": 1, "count": len(files)}
+    manifest = {"version": 2, "count": len(files),
+                **{name: len(group_files) for name, group_files in groups.items()}}
     (output / "flower_random.json").write_text(json.dumps(manifest) + "\n", encoding="utf-8")
     return manifest
 

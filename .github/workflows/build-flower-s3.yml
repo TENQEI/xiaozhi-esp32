@@ -12,6 +12,7 @@ on:
       - main/CMakeLists.txt
       - scripts/prepare_flower_chimes.py
       - scripts/tests/test_flower_chime.py
+      - scripts/tests/test_flower_random.py
       - scripts/tests/test_flower_web.py
       - scripts/tests/test_flower_calendar.py
       - scripts/tests/test_notify_player.py
@@ -62,8 +63,11 @@ jobs:
           (root / "chime-config.json").write_text('{"enabled":false,"quiet_start":20,"quiet_end":8}')
           phrases = Path("build/ci-phrases")
           phrases.mkdir(parents=True, exist_ok=True)
-          for index in range(3):
-              shutil.copyfile(f"main/assets/locales/zh-CN/{index}.ogg", phrases / f"phrase-{index}.ogg")
+          for group in ("common", "morning", "afternoon", "evening"):
+              folder = phrases / group
+              folder.mkdir(exist_ok=True)
+              for index in range(4):
+                  shutil.copyfile(f"main/assets/locales/zh-CN/{index}.ogg", folder / f"phrase-{index}.ogg")
           greetings = Path("build/ci-greetings")
           greetings.mkdir(parents=True, exist_ok=True)
           for name in ("good_morning", "good_night"):
