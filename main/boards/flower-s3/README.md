@@ -113,23 +113,30 @@ python scripts/build.py flower-s3 --name flower-s3 --language zh-CN --zip
 | --- | --- | --- |
 | 十二小时整点报时 | `clock_01.ogg` 至 `clock_12.ogg` | 12 |
 | 早安、晚安 | `greeting_morning.ogg`、`greeting_night.ogg` | 2 |
-| 上午定型文（06:00–12:00） | `phrase_morning_01.ogg` 至 `04` | 4 |
-| 下午定型文（12:00–18:00） | `phrase_afternoon_01.ogg` 至 `04` | 4 |
-| 晚间定型文（18:00–次日06:00） | `phrase_evening_01.ogg` 至 `04` | 4 |
-| 全天定型文 | `phrase_anytime_01.ogg` 至 `10` | 10 |
-| 连续会话开始 | `session_start_01.ogg` 至 `03` | 3 |
-| 连续会话结束 | `session_end_01.ogg` 至 `03` | 3 |
+| 上午定型文（06:00–12:00） | `phrase_morning_01.ogg` 至 `phrase_morning_05.ogg` | 5 |
+| 下午定型文（12:00–18:00） | `phrase_afternoon_01.ogg` 至 `phrase_afternoon_05.ogg` | 5 |
+| 晚间定型文（18:00–次日06:00） | `phrase_evening_01.ogg` 至 `phrase_evening_07.ogg` | 7 |
+| 全天定型文 | `phrase_anytime_01.ogg` 至 `phrase_anytime_19.ogg` | 19 |
+| 连续会话开始 | `session_start_01.ogg` 至 `session_start_05.ogg` | 5 |
+| 连续会话结束 | `session_end_01.ogg` | 1 |
 
-合计 42 个文件，全部使用 Ogg Opus、单声道、输入采样率 16 kHz、16 kbps。
+合计 56 个文件，全部使用 Ogg Opus、单声道、输入采样率 16 kHz、16 kbps。
 Opus 的容器时间轴采用 48 kHz，这是正常格式行为。
-当前提交的是约 0.4 秒的测试音，不是正式角色语音。每个文件使用不同音高。
-清单记录类别、名称、启用标记、占位标记和预计正式时长；预计时长不是占位音的实测时长。
+
+本次加入 44 段去重后的花花录音，保留后续手工分类、切分、合并与裁剪结果。
+清单的 `title` 记录内容名称；正式素材标记为 `placeholder: false`，时长来自实际文件测量。
+十二条整点报时仍为原有测试占位音，尚未提供正式报时录音。
+当前源素材包含机器识别命名，绕口令和拟声词仍需试听核对。
 
 生成缺失占位文件（需要 ffmpeg，不覆盖任何现有文件）：
 
 ```bash
 python scripts/generate_flower_placeholders.py
 ```
+
+定型文及会话音数量由清单决定，不再固定每组条数。新增音频使用所属类别前缀和至少两位正整数编号，
+同步添加清单记录即可；十二条报时和两条问候仍为固定槽位。当前随机播放器支持最多 64 条启用定型文，
+会话开始、结束各最多 64 条；校验器会提前拒绝超限配置。
 
 正式录音按同名替换，清单中的 `placeholder` 改为 `false`，然后重新编译。
 `enabled: false` 可以停用某条音频；停用仍保留资源嵌入和清单完整性。
@@ -209,7 +216,7 @@ python scripts/build.py flower-s3 --name flower-s3 --language zh-CN --zip
 python scripts/verify_flower_firmware.py
 ```
 
-最后一个命令检查实际 ELF 中全部 42 对资源符号及长度，读取实际分区表验证 8 MB 范围和两套 OTA 槽，
+最后一个命令检查实际 ELF 中清单内全部资源符号及长度，读取实际分区表验证 8 MB 范围和两套 OTA 槽，
 输出 `build/flower-audio-report.json`，含 app.bin 实际字节数与最小 OTA 槽剩余空间。
 Actions 另外用预计正式时长的独立测试素材重新构建，报告容量；正式下载产物在该测试前上传。
 不能把主机链接测试或占位文件总大小当作 ESP32 固件大小。

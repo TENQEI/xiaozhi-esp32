@@ -8,16 +8,19 @@ from pathlib import Path
 
 from prepare_flower_chimes import validate_ogg
 
-GROUPS = {"clock": ("clock", 12), "greeting": ("greeting", 2),
-          "phrase_morning": ("phrase_morning", 4), "phrase_afternoon": ("phrase_afternoon", 4),
-          "phrase_evening": ("phrase_evening", 4), "phrase_anytime": ("phrase_anytime", 10),
-          "session_start": ("session_start", 3), "session_end": ("session_end", 3)}
+GROUPS = ("clock", "greeting", "phrase_morning", "phrase_afternoon",
+          "phrase_evening", "phrase_anytime", "session_start", "session_end")
+REQUIRED_FILES = {f"clock_{i:02d}.ogg": "clock" for i in range(1, 13)} | {
+    "greeting_morning.ogg": "greeting", "greeting_night.ogg": "greeting"}
 
 
-def expected_files():
-    return {f"{prefix}_{i:02d}.ogg": group for group, (prefix, count) in GROUPS.items()
-            for i in range(1, count + 1) if group != "greeting"} | {
-                "greeting_morning.ogg": "greeting", "greeting_night.ogg": "greeting"}
+def valid_recording_name(name, group):
+    if not isinstance(name, str) or group not in GROUPS:
+        return False
+    if group in ("clock", "greeting"):
+        return REQUIRED_FILES.get(name) == group
+    match = re.fullmatch(rf"{group}_([0-9]{{2,}})\.ogg", name)
+    return match is not None and int(match[1]) > 0
 
 
 def load_manifest(path, validate_audio=True):
@@ -30,15 +33,14 @@ def load_manifest(path, validate_audio=True):
             type(manifest.get("automatic_enabled")) is not bool):
         raise ValueError("unsupported Flower manifest version or audio format")
     records = manifest.get("audio")
-    if not isinstance(records, list) or len(records) != 42:
-        raise ValueError("Flower manifest must contain exactly 42 recordings")
-    expected = expected_files()
+    if not isinstance(records, list):
+        raise ValueError("Flower recordings must be a list")
     seen = set()
     for item in records:
         if not isinstance(item, dict):
             raise ValueError("recording must be an object")
         name = item.get("file")
-        if name not in expected or name in seen or item.get("category") != expected[name]:
+        if not valid_recording_name(name, item.get("category")) or name in seen:
             raise ValueError(f"unknown, duplicate or misclassified recording: {name}")
         if item.get("id") != Path(name).stem.upper() or not re.fullmatch(r"[A-Z0-9_]+", item["id"]):
             raise ValueError(f"invalid audio id: {name}")
@@ -54,6 +56,15 @@ def load_manifest(path, validate_audio=True):
             head = data.find(b"OpusHead")
             if head < 0 or struct.unpack_from("<I", data, head + 12)[0] != 16000:
                 raise ValueError(f"Opus input sample rate must be 16000 Hz: {name}")
+    if not set(REQUIRED_FILES).issubset(seen):
+        raise ValueError("all twelve clock slots and both greetings are required")
+    # Match RandomPhraseIndex/PhraseCount's existing runtime bounds.
+    enabled = [item for item in records if item["enabled"]]
+    if sum(item["category"].startswith("phrase_") for item in enabled) > 64:
+        raise ValueError("enabled phrases exceed the runtime limit of 64")
+    for group in ("session_start", "session_end"):
+        if sum(item["category"] == group for item in enabled) > 64:
+            raise ValueError(f"enabled {group} clips exceed the runtime limit of 64")
     if validate_audio and {p.name for p in path.parent.glob("*.ogg")} != seen:
         raise ValueError("Flower directory and manifest file lists must match exactly")
     return manifest
@@ -97,7 +108,7 @@ def main():
     except (ValueError, OSError, KeyError, TypeError) as error:
         parser.exit(1, f"Flower audio: {error}\n")
     size = sum((args.manifest.parent / item["file"]).stat().st_size for item in manifest["audio"])
-    print(f"Flower audio: 42 files, {size} bytes, {sum(item['placeholder'] for item in manifest['audio'])} placeholders")
+    print(f"Flower audio: {len(manifest['audio'])} files, {size} bytes, {sum(item['placeholder'] for item in manifest['audio'])} placeholders")
 
 
 if __name__ == "__main__":

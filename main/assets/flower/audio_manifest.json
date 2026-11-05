@@ -109,241 +109,397 @@
       "id": "GREETING_MORNING",
       "category": "greeting",
       "file": "greeting_morning.ogg",
-      "expected_duration_s": 5,
+      "expected_duration_s": 5.692,
       "enabled": true,
-      "placeholder": true
+      "placeholder": false,
+      "title": "早安今天有点热呢"
     },
     {
       "id": "GREETING_NIGHT",
       "category": "greeting",
       "file": "greeting_night.ogg",
-      "expected_duration_s": 5,
+      "expected_duration_s": 4.556,
       "enabled": true,
-      "placeholder": true
-    },
-    {
-      "id": "PHRASE_AFTERNOON_01",
-      "category": "phrase_afternoon",
-      "file": "phrase_afternoon_01.ogg",
-      "expected_duration_s": 5,
-      "enabled": true,
-      "placeholder": true
-    },
-    {
-      "id": "PHRASE_AFTERNOON_02",
-      "category": "phrase_afternoon",
-      "file": "phrase_afternoon_02.ogg",
-      "expected_duration_s": 5,
-      "enabled": true,
-      "placeholder": true
-    },
-    {
-      "id": "PHRASE_AFTERNOON_03",
-      "category": "phrase_afternoon",
-      "file": "phrase_afternoon_03.ogg",
-      "expected_duration_s": 5,
-      "enabled": true,
-      "placeholder": true
-    },
-    {
-      "id": "PHRASE_AFTERNOON_04",
-      "category": "phrase_afternoon",
-      "file": "phrase_afternoon_04.ogg",
-      "expected_duration_s": 5,
-      "enabled": true,
-      "placeholder": true
-    },
-    {
-      "id": "PHRASE_ANYTIME_01",
-      "category": "phrase_anytime",
-      "file": "phrase_anytime_01.ogg",
-      "expected_duration_s": 5,
-      "enabled": true,
-      "placeholder": true
-    },
-    {
-      "id": "PHRASE_ANYTIME_02",
-      "category": "phrase_anytime",
-      "file": "phrase_anytime_02.ogg",
-      "expected_duration_s": 5,
-      "enabled": true,
-      "placeholder": true
-    },
-    {
-      "id": "PHRASE_ANYTIME_03",
-      "category": "phrase_anytime",
-      "file": "phrase_anytime_03.ogg",
-      "expected_duration_s": 5,
-      "enabled": true,
-      "placeholder": true
-    },
-    {
-      "id": "PHRASE_ANYTIME_04",
-      "category": "phrase_anytime",
-      "file": "phrase_anytime_04.ogg",
-      "expected_duration_s": 5,
-      "enabled": true,
-      "placeholder": true
-    },
-    {
-      "id": "PHRASE_ANYTIME_05",
-      "category": "phrase_anytime",
-      "file": "phrase_anytime_05.ogg",
-      "expected_duration_s": 5,
-      "enabled": true,
-      "placeholder": true
-    },
-    {
-      "id": "PHRASE_ANYTIME_06",
-      "category": "phrase_anytime",
-      "file": "phrase_anytime_06.ogg",
-      "expected_duration_s": 5,
-      "enabled": true,
-      "placeholder": true
-    },
-    {
-      "id": "PHRASE_ANYTIME_07",
-      "category": "phrase_anytime",
-      "file": "phrase_anytime_07.ogg",
-      "expected_duration_s": 5,
-      "enabled": true,
-      "placeholder": true
-    },
-    {
-      "id": "PHRASE_ANYTIME_08",
-      "category": "phrase_anytime",
-      "file": "phrase_anytime_08.ogg",
-      "expected_duration_s": 5,
-      "enabled": true,
-      "placeholder": true
-    },
-    {
-      "id": "PHRASE_ANYTIME_09",
-      "category": "phrase_anytime",
-      "file": "phrase_anytime_09.ogg",
-      "expected_duration_s": 5,
-      "enabled": true,
-      "placeholder": true
-    },
-    {
-      "id": "PHRASE_ANYTIME_10",
-      "category": "phrase_anytime",
-      "file": "phrase_anytime_10.ogg",
-      "expected_duration_s": 5,
-      "enabled": true,
-      "placeholder": true
-    },
-    {
-      "id": "PHRASE_EVENING_01",
-      "category": "phrase_evening",
-      "file": "phrase_evening_01.ogg",
-      "expected_duration_s": 5,
-      "enabled": true,
-      "placeholder": true
-    },
-    {
-      "id": "PHRASE_EVENING_02",
-      "category": "phrase_evening",
-      "file": "phrase_evening_02.ogg",
-      "expected_duration_s": 5,
-      "enabled": true,
-      "placeholder": true
-    },
-    {
-      "id": "PHRASE_EVENING_03",
-      "category": "phrase_evening",
-      "file": "phrase_evening_03.ogg",
-      "expected_duration_s": 5,
-      "enabled": true,
-      "placeholder": true
-    },
-    {
-      "id": "PHRASE_EVENING_04",
-      "category": "phrase_evening",
-      "file": "phrase_evening_04.ogg",
-      "expected_duration_s": 5,
-      "enabled": true,
-      "placeholder": true
+      "placeholder": false,
+      "title": "晚安睡觉时要保持凉爽啊"
     },
     {
       "id": "PHRASE_MORNING_01",
       "category": "phrase_morning",
       "file": "phrase_morning_01.ogg",
-      "expected_duration_s": 5,
+      "expected_duration_s": 1.962,
       "enabled": true,
-      "placeholder": true
+      "placeholder": false,
+      "title": "今天的你也好惊奇"
     },
     {
       "id": "PHRASE_MORNING_02",
       "category": "phrase_morning",
       "file": "phrase_morning_02.ogg",
-      "expected_duration_s": 5,
+      "expected_duration_s": 3.253,
       "enabled": true,
-      "placeholder": true
+      "placeholder": false,
+      "title": "今天的运势超优秀"
     },
     {
       "id": "PHRASE_MORNING_03",
       "category": "phrase_morning",
       "file": "phrase_morning_03.ogg",
-      "expected_duration_s": 5,
+      "expected_duration_s": 1.558,
       "enabled": true,
-      "placeholder": true
+      "placeholder": false,
+      "title": "今天要做什么呢"
     },
     {
       "id": "PHRASE_MORNING_04",
       "category": "phrase_morning",
       "file": "phrase_morning_04.ogg",
-      "expected_duration_s": 5,
+      "expected_duration_s": 1.444,
       "enabled": true,
-      "placeholder": true
+      "placeholder": false,
+      "title": "外面的天气怎么样"
     },
     {
-      "id": "SESSION_END_01",
-      "category": "session_end",
-      "file": "session_end_01.ogg",
-      "expected_duration_s": 5,
+      "id": "PHRASE_MORNING_05",
+      "category": "phrase_morning",
+      "file": "phrase_morning_05.ogg",
+      "expected_duration_s": 1.754,
       "enabled": true,
-      "placeholder": true
+      "placeholder": false,
+      "title": "好出发"
     },
     {
-      "id": "SESSION_END_02",
-      "category": "session_end",
-      "file": "session_end_02.ogg",
-      "expected_duration_s": 5,
+      "id": "PHRASE_AFTERNOON_01",
+      "category": "phrase_afternoon",
+      "file": "phrase_afternoon_01.ogg",
+      "expected_duration_s": 3.22,
       "enabled": true,
-      "placeholder": true
+      "placeholder": false,
+      "title": "你今天吃了什么记得要吃蔬菜哦"
     },
     {
-      "id": "SESSION_END_03",
-      "category": "session_end",
-      "file": "session_end_03.ogg",
-      "expected_duration_s": 5,
+      "id": "PHRASE_AFTERNOON_02",
+      "category": "phrase_afternoon",
+      "file": "phrase_afternoon_02.ogg",
+      "expected_duration_s": 1.042,
       "enabled": true,
-      "placeholder": true
+      "placeholder": false,
+      "title": "加油啊"
+    },
+    {
+      "id": "PHRASE_AFTERNOON_03",
+      "category": "phrase_afternoon",
+      "file": "phrase_afternoon_03.ogg",
+      "expected_duration_s": 1.292,
+      "enabled": true,
+      "placeholder": false,
+      "title": "吃过饭了吗"
+    },
+    {
+      "id": "PHRASE_AFTERNOON_04",
+      "category": "phrase_afternoon",
+      "file": "phrase_afternoon_04.ogg",
+      "expected_duration_s": 1.595,
+      "enabled": true,
+      "placeholder": false,
+      "title": "好开心啊"
+    },
+    {
+      "id": "PHRASE_AFTERNOON_05",
+      "category": "phrase_afternoon",
+      "file": "phrase_afternoon_05.ogg",
+      "expected_duration_s": 1.776,
+      "enabled": true,
+      "placeholder": false,
+      "title": "这天气好适合午睡"
+    },
+    {
+      "id": "PHRASE_EVENING_01",
+      "category": "phrase_evening",
+      "file": "phrase_evening_01.ogg",
+      "expected_duration_s": 1.496,
+      "enabled": true,
+      "placeholder": false,
+      "title": "今天也辛苦你了"
+    },
+    {
+      "id": "PHRASE_EVENING_02",
+      "category": "phrase_evening",
+      "file": "phrase_evening_02.ogg",
+      "expected_duration_s": 2.167,
+      "enabled": true,
+      "placeholder": false,
+      "title": "今天的月亮是什么形状呢"
+    },
+    {
+      "id": "PHRASE_EVENING_03",
+      "category": "phrase_evening",
+      "file": "phrase_evening_03.ogg",
+      "expected_duration_s": 1.56,
+      "enabled": true,
+      "placeholder": false,
+      "title": "今天过得如何"
+    },
+    {
+      "id": "PHRASE_EVENING_04",
+      "category": "phrase_evening",
+      "file": "phrase_evening_04.ogg",
+      "expected_duration_s": 2.543,
+      "enabled": true,
+      "placeholder": false,
+      "title": "作业写完了吗"
+    },
+    {
+      "id": "PHRASE_EVENING_05",
+      "category": "phrase_evening",
+      "file": "phrase_evening_05.ogg",
+      "expected_duration_s": 1.815,
+      "enabled": true,
+      "placeholder": false,
+      "title": "夜晚真让人兴奋啊"
+    },
+    {
+      "id": "PHRASE_EVENING_06",
+      "category": "phrase_evening",
+      "file": "phrase_evening_06.ogg",
+      "expected_duration_s": 2.381,
+      "enabled": true,
+      "placeholder": false,
+      "title": "我也喜欢平平无奇的一天"
+    },
+    {
+      "id": "PHRASE_EVENING_07",
+      "category": "phrase_evening",
+      "file": "phrase_evening_07.ogg",
+      "expected_duration_s": 2.318,
+      "enabled": true,
+      "placeholder": false,
+      "title": "明天要做什么呢"
+    },
+    {
+      "id": "PHRASE_ANYTIME_01",
+      "category": "phrase_anytime",
+      "file": "phrase_anytime_01.ogg",
+      "expected_duration_s": 2.115,
+      "enabled": true,
+      "placeholder": false,
+      "title": "不觉得我跟你有点像吗"
+    },
+    {
+      "id": "PHRASE_ANYTIME_02",
+      "category": "phrase_anytime",
+      "file": "phrase_anytime_02.ogg",
+      "expected_duration_s": 2.2,
+      "enabled": true,
+      "placeholder": false,
+      "title": "会讲话的花很奇怪吗"
+    },
+    {
+      "id": "PHRASE_ANYTIME_03",
+      "category": "phrase_anytime",
+      "file": "phrase_anytime_03.ogg",
+      "expected_duration_s": 2.314,
+      "enabled": true,
+      "placeholder": false,
+      "title": "你家待起来好舒服哦"
+    },
+    {
+      "id": "PHRASE_ANYTIME_04",
+      "category": "phrase_anytime",
+      "file": "phrase_anytime_04.ogg",
+      "expected_duration_s": 2.178,
+      "enabled": true,
+      "placeholder": false,
+      "title": "你知道地球一直在转吗"
+    },
+    {
+      "id": "PHRASE_ANYTIME_05",
+      "category": "phrase_anytime",
+      "file": "phrase_anytime_05.ogg",
+      "expected_duration_s": 4.989,
+      "enabled": true,
+      "placeholder": false,
+      "title": "剪刀石头布_你挺厉害的嘛"
+    },
+    {
+      "id": "PHRASE_ANYTIME_06",
+      "category": "phrase_anytime",
+      "file": "phrase_anytime_06.ogg",
+      "expected_duration_s": 2.457,
+      "enabled": true,
+      "placeholder": false,
+      "title": "发呆真舒服啊"
+    },
+    {
+      "id": "PHRASE_ANYTIME_07",
+      "category": "phrase_anytime",
+      "file": "phrase_anytime_07.ogg",
+      "expected_duration_s": 2.526,
+      "enabled": true,
+      "placeholder": false,
+      "title": "听说海水的味道跟眼泪一样呢"
+    },
+    {
+      "id": "PHRASE_ANYTIME_08",
+      "category": "phrase_anytime",
+      "file": "phrase_anytime_08.ogg",
+      "expected_duration_s": 3.326,
+      "enabled": true,
+      "placeholder": false,
+      "title": "啊睁着眼睛睡着了"
+    },
+    {
+      "id": "PHRASE_ANYTIME_09",
+      "category": "phrase_anytime",
+      "file": "phrase_anytime_09.ogg",
+      "expected_duration_s": 2.107,
+      "enabled": true,
+      "placeholder": false,
+      "title": "嘿嘿我很棒吧"
+    },
+    {
+      "id": "PHRASE_ANYTIME_10",
+      "category": "phrase_anytime",
+      "file": "phrase_anytime_10.ogg",
+      "expected_duration_s": 2.307,
+      "enabled": true,
+      "placeholder": false,
+      "title": "四和十绕口令"
+    },
+    {
+      "id": "PHRASE_ANYTIME_11",
+      "category": "phrase_anytime",
+      "file": "phrase_anytime_11.ogg",
+      "expected_duration_s": 5.261,
+      "enabled": true,
+      "placeholder": false,
+      "title": "想到一个好主意_咦是什么来着"
+    },
+    {
+      "id": "PHRASE_ANYTIME_12",
+      "category": "phrase_anytime",
+      "file": "phrase_anytime_12.ogg",
+      "expected_duration_s": 2.207,
+      "enabled": true,
+      "placeholder": false,
+      "title": "我很喜欢你哦"
+    },
+    {
+      "id": "PHRASE_ANYTIME_13",
+      "category": "phrase_anytime",
+      "file": "phrase_anytime_13.ogg",
+      "expected_duration_s": 1.603,
+      "enabled": true,
+      "placeholder": false,
+      "title": "找到要找的东西了吗"
+    },
+    {
+      "id": "PHRASE_ANYTIME_14",
+      "category": "phrase_anytime",
+      "file": "phrase_anytime_14.ogg",
+      "expected_duration_s": 3.049,
+      "enabled": true,
+      "placeholder": false,
+      "title": "拟声旋律"
+    },
+    {
+      "id": "PHRASE_ANYTIME_15",
+      "category": "phrase_anytime",
+      "file": "phrase_anytime_15.ogg",
+      "expected_duration_s": 1.516,
+      "enabled": true,
+      "placeholder": false,
+      "title": "拟声短音"
+    },
+    {
+      "id": "PHRASE_ANYTIME_16",
+      "category": "phrase_anytime",
+      "file": "phrase_anytime_16.ogg",
+      "expected_duration_s": 1.913,
+      "enabled": true,
+      "placeholder": false,
+      "title": "有种很惊奇的感觉"
+    },
+    {
+      "id": "PHRASE_ANYTIME_17",
+      "category": "phrase_anytime",
+      "file": "phrase_anytime_17.ogg",
+      "expected_duration_s": 6.907,
+      "enabled": true,
+      "placeholder": false,
+      "title": "来一起深呼吸"
+    },
+    {
+      "id": "PHRASE_ANYTIME_18",
+      "category": "phrase_anytime",
+      "file": "phrase_anytime_18.ogg",
+      "expected_duration_s": 4.032,
+      "enabled": true,
+      "placeholder": false,
+      "title": "没关系放轻松放轻松"
+    },
+    {
+      "id": "PHRASE_ANYTIME_19",
+      "category": "phrase_anytime",
+      "file": "phrase_anytime_19.ogg",
+      "expected_duration_s": 1.877,
+      "enabled": true,
+      "placeholder": false,
+      "title": "该放松一下了"
     },
     {
       "id": "SESSION_START_01",
       "category": "session_start",
       "file": "session_start_01.ogg",
-      "expected_duration_s": 5,
+      "expected_duration_s": 0.83,
       "enabled": true,
-      "placeholder": true
+      "placeholder": false,
+      "title": "叫我吗"
     },
     {
       "id": "SESSION_START_02",
       "category": "session_start",
       "file": "session_start_02.ogg",
-      "expected_duration_s": 5,
+      "expected_duration_s": 0.656,
       "enabled": true,
-      "placeholder": true
+      "placeholder": false,
+      "title": "嗯"
     },
     {
       "id": "SESSION_START_03",
       "category": "session_start",
       "file": "session_start_03.ogg",
-      "expected_duration_s": 5,
+      "expected_duration_s": 0.802,
       "enabled": true,
-      "placeholder": true
+      "placeholder": false,
+      "title": "怎么了"
+    },
+    {
+      "id": "SESSION_START_04",
+      "category": "session_start",
+      "file": "session_start_04.ogg",
+      "expected_duration_s": 1.329,
+      "enabled": true,
+      "placeholder": false,
+      "title": "想跟我聊天吗"
+    },
+    {
+      "id": "SESSION_START_05",
+      "category": "session_start",
+      "file": "session_start_05.ogg",
+      "expected_duration_s": 1.526,
+      "enabled": true,
+      "placeholder": false,
+      "title": "我可以说话了吗"
+    },
+    {
+      "id": "SESSION_END_01",
+      "category": "session_end",
+      "file": "session_end_01.ogg",
+      "expected_duration_s": 1.935,
+      "enabled": true,
+      "placeholder": false,
+      "title": "我暂时安静一下哦"
     }
   ]
 }
