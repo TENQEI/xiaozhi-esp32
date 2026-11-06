@@ -13,97 +13,109 @@
       "id": "CLOCK_01",
       "category": "clock",
       "file": "clock_01.ogg",
-      "expected_duration_s": 10,
+      "expected_duration_s": 4.627,
       "enabled": true,
-      "placeholder": true
+      "placeholder": false,
+      "title": "一点报时"
     },
     {
       "id": "CLOCK_02",
       "category": "clock",
       "file": "clock_02.ogg",
-      "expected_duration_s": 10,
+      "expected_duration_s": 4.266,
       "enabled": true,
-      "placeholder": true
+      "placeholder": false,
+      "title": "两点报时"
     },
     {
       "id": "CLOCK_03",
       "category": "clock",
       "file": "clock_03.ogg",
-      "expected_duration_s": 10,
+      "expected_duration_s": 6.247,
       "enabled": true,
-      "placeholder": true
+      "placeholder": false,
+      "title": "三点报时"
     },
     {
       "id": "CLOCK_04",
       "category": "clock",
       "file": "clock_04.ogg",
-      "expected_duration_s": 10,
+      "expected_duration_s": 4.527,
       "enabled": true,
-      "placeholder": true
+      "placeholder": false,
+      "title": "四点报时"
     },
     {
       "id": "CLOCK_05",
       "category": "clock",
       "file": "clock_05.ogg",
-      "expected_duration_s": 10,
+      "expected_duration_s": 4.497,
       "enabled": true,
-      "placeholder": true
+      "placeholder": false,
+      "title": "五点报时"
     },
     {
       "id": "CLOCK_06",
       "category": "clock",
       "file": "clock_06.ogg",
-      "expected_duration_s": 10,
+      "expected_duration_s": 7.407,
       "enabled": true,
-      "placeholder": true
+      "placeholder": false,
+      "title": "六点报时"
     },
     {
       "id": "CLOCK_07",
       "category": "clock",
       "file": "clock_07.ogg",
-      "expected_duration_s": 10,
+      "expected_duration_s": 3.917,
       "enabled": true,
-      "placeholder": true
+      "placeholder": false,
+      "title": "七点报时"
     },
     {
       "id": "CLOCK_08",
       "category": "clock",
       "file": "clock_08.ogg",
-      "expected_duration_s": 10,
+      "expected_duration_s": 4.497,
       "enabled": true,
-      "placeholder": true
+      "placeholder": false,
+      "title": "八点报时"
     },
     {
       "id": "CLOCK_09",
       "category": "clock",
       "file": "clock_09.ogg",
-      "expected_duration_s": 10,
+      "expected_duration_s": 4.356,
       "enabled": true,
-      "placeholder": true
+      "placeholder": false,
+      "title": "九点报时"
     },
     {
       "id": "CLOCK_10",
       "category": "clock",
       "file": "clock_10.ogg",
-      "expected_duration_s": 10,
+      "expected_duration_s": 4.367,
       "enabled": true,
-      "placeholder": true
+      "placeholder": false,
+      "title": "十点报时"
     },
     {
       "id": "CLOCK_11",
       "category": "clock",
       "file": "clock_11.ogg",
-      "expected_duration_s": 10,
+      "expected_duration_s": 4.646,
       "enabled": true,
-      "placeholder": true
+      "placeholder": false,
+      "title": "十一点报时"
     },
     {
       "id": "CLOCK_12",
       "category": "clock",
       "file": "clock_12.ogg",
-      "expected_duration_s": 10,
+      "expected_duration_s": 7.207,
       "enabled": true,
-      "placeholder": true
+      "placeholder": false,
+      "title": "十二点报时"
     },
     {
       "id": "GREETING_MORNING",
