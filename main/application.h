@@ -187,6 +187,7 @@ private:
     void StartListeningAudio();
     void ConfigureWakeWordForListening();
     void ShowStartupWakeWordHint();
+    void PlayReadySound(bool first_startup);
     void HideStartupWakeWordHint();
     bool StartNotification(std::string audio_url, std::vector<NotifySubtitle> subtitles,
                            std::string local_audio = {});

@@ -25,8 +25,9 @@ bool PlayLocalAudio(std::string_view sound){++calls;last=sound;return accepted &
             header=['#pragma once','#include <array>','#include <string_view>',
                     'namespace Flower::Sounds {struct Clip{std::string_view data;int id;};',
                     'inline constexpr bool AUTOMATIC_ENABLED=true,GREETING_MORNING_ENABLED=true,GREETING_NIGHT_ENABLED=true;',
-                    'inline constexpr std::string_view GREETING_MORNING="morning",GREETING_NIGHT="night";']
-            for group,count,offset in [('CLOCK',12,0),('PHRASE_ANYTIME',10,100),('PHRASE_MORNING',4,200),('PHRASE_AFTERNOON',4,300),('PHRASE_EVENING',4,400),('SESSION_START',3,500),('SESSION_END',3,600)]:
+                    'inline constexpr std::string_view GREETING_MORNING="morning",GREETING_NIGHT="night";',
+                    'inline bool STARTUP_READY_ENABLED=true; inline constexpr std::string_view STARTUP_READY="startup-ready";']
+            for group,count,offset in [('CLOCK',12,0),('PHRASE_ANYTIME',10,100),('PHRASE_MORNING',4,200),('PHRASE_AFTERNOON',4,300),('PHRASE_EVENING',4,400),('SESSION_START',4,500),('SESSION_END',3,600)]:
                 values=','.join('{"%s-%d",%d}'%(group,i,offset+i) for i in range(count))
                 header.append('inline const std::array<Clip,%d> %s{{%s}};'%(count,group,values))
             (folder/'flower_audio_assets.h').write_text('\n'.join(header+['}']))
@@ -34,13 +35,22 @@ bool PlayLocalAudio(std::string_view sound){++calls;last=sound;return accepted &
             driver.write_text(r'''#include "flower_audio_manager.h"
 #include "application.h"
 #include "esp_random.h"
+#include "flower_audio_assets.h"
 #include <cassert>
 #include <ctime>
 #include <cstdlib>
+#ifdef __APPLE__
+#define FLOWER_TIME_NOEXCEPT
+#else
+#define FLOWER_TIME_NOEXCEPT noexcept
+#endif
 inline std::time_t now=0;
-extern "C" std::time_t time(std::time_t* out) noexcept {if(out){*out=now;} return now;}
+extern "C" std::time_t time(std::time_t* out) FLOWER_TIME_NOEXCEPT {if(out){*out=now;} return now;}
 int main(){
 flower::FlowerAudioManager manager;
+assert(manager.StartupSound()=="startup-ready");
+Flower::Sounds::STARTUP_READY_ENABLED=false;assert(manager.StartupSound().empty());
+Flower::Sounds::STARTUP_READY_ENABLED=true;
 setenv("TZ","CST-8",1);tzset();
 std::string previous;
 for(int hour : {0,5,6,11,12,17,18,23}){

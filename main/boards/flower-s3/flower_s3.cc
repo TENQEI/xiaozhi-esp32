@@ -58,6 +58,7 @@ public:
     }
 
     void OnClockTick() override { hourly_chime_.Tick(); }
+    std::string_view GetStartupSound() override { return audio_manager_.StartupSound(); }
     std::string_view GetSessionSound(bool starting) override {
         return audio_manager_.SessionSound(starting);
     }

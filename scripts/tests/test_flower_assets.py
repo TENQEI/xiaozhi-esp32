@@ -20,9 +20,9 @@ ASSETS = ROOT / "main/assets/flower"
 
 
 class FlowerEmbeddedAssetsTest(unittest.TestCase):
-    def test_manifest_all_42_files_decode_and_placeholders_never_overwrite(self):
+    def test_manifest_all_files_decode_and_placeholders_never_overwrite(self):
         manifest = load_manifest(ASSETS / "audio_manifest.json")
-        self.assertEqual(len(manifest["audio"]), 42)
+        self.assertEqual(len(manifest["audio"]), 56)
         if not shutil.which("ffmpeg"):
             self.skipTest("ffmpeg needed to verify actual decoding")
         for item in manifest["audio"]:
@@ -58,6 +58,42 @@ class FlowerEmbeddedAssetsTest(unittest.TestCase):
             (folder / "extra.ogg").unlink()
             (folder / "clock_01.ogg").write_bytes(b"not an ogg")
             with self.assertRaises(ValueError): load_manifest(path)
+
+    def test_manifest_accepts_additional_phrase_and_session_clips(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory) / "flower"
+            shutil.copytree(ASSETS, folder)
+            path = folder / "audio_manifest.json"
+            manifest = json.loads(path.read_text())
+            for category in ("phrase_anytime", "session_start"):
+                item = next(dict(row) for row in manifest["audio"] if row["category"] == category)
+                source = folder / item["file"]
+                item.update(id=f"{category.upper()}_99", file=f"{category}_99.ogg")
+                shutil.copyfile(source, folder / item["file"])
+                manifest["audio"].append(item)
+            path.write_text(json.dumps(manifest))
+            header = folder / "audio.h"
+            generate(path, header)
+            self.assertIn("PHRASE_ANYTIME_99", header.read_text())
+            self.assertIn("SESSION_START_99", header.read_text())
+            self.assertIn("std::array<Clip,5> SESSION_START", header.read_text())
+
+    def test_manifest_rejects_duplicate_missing_required_and_runtime_overflow(self):
+        original = json.loads((ASSETS / "audio_manifest.json").read_text())
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "audio_manifest.json"
+            duplicate = dict(original, audio=original["audio"] + [original["audio"][-1]])
+            missing = dict(original, audio=original["audio"][1:])
+            overflow = dict(original, audio=list(original["audio"]))
+            template = next(row for row in original["audio"] if row["category"] == "phrase_anytime")
+            for number in range(100, 165):
+                item = dict(template, id=f"PHRASE_ANYTIME_{number}", file=f"phrase_anytime_{number}.ogg")
+                overflow["audio"].append(item)
+            for manifest in (duplicate, missing, overflow):
+                path.write_text(json.dumps(manifest))
+                with self.subTest(recordings=len(manifest["audio"])):
+                    with self.assertRaises(ValueError):
+                        load_manifest(path, validate_audio=False)
 
     def test_cmake_rebuilds_manifest_and_rejects_file_set_changes(self):
         cmake = shutil.which("cmake")
@@ -110,6 +146,9 @@ include("{ROOT}/main/boards/flower-s3/flower_assets.cmake")
     def test_generated_symbols_link_and_match_actual_bytes(self):
         if not shutil.which("ld") or not shutil.which("nm"):
             self.skipTest("host binutils needed")
+        version = subprocess.run(["ld", "--version"], capture_output=True, text=True)
+        if "GNU" not in version.stdout:
+            self.skipTest("GNU ld binary embedding is required")
         with tempfile.TemporaryDirectory() as directory:
             folder = Path(directory)
             manifest = generate(ASSETS / "audio_manifest.json", folder / "flower_audio_assets.h")
@@ -122,7 +161,7 @@ include("{ROOT}/main/boards/flower-s3/flower_assets.cmake")
 #include <cassert>
 int main() {
 using namespace Flower::Sounds;
-assert(CLOCK.size()==12 && PHRASE_ANYTIME.size()==10 && SESSION_START.size()==3);
+assert(CLOCK.size()==12 && PHRASE_ANYTIME.size()==19 && SESSION_START.size()==4 && STARTUP.size()==1);
 assert(CLOCK_01.substr(0,4)=="OggS" && GREETING_NIGHT.substr(0,4)=="OggS");
 }''')
             compiler = shlex.split(os.environ.get("CXX", "c++"))
@@ -131,7 +170,7 @@ assert(CLOCK_01.substr(0,4)=="OggS" && GREETING_NIGHT.substr(0,4)=="OggS");
                                        "-o", str(executable)], check=True)
             subprocess.run([str(executable)], check=True)
             report = verify(ASSETS / "audio_manifest.json", executable, executable, "nm")
-            self.assertEqual(report["audio_files"], 42)
+            self.assertEqual(report["audio_files"], 56)
             self.assertGreater(report["free_bytes"], 0)
             with self.assertRaises(ValueError):
                 verify(ASSETS / "audio_manifest.json", executable, executable, "nm", 1)

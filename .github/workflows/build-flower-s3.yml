@@ -3,7 +3,7 @@ name: Build Flower S3
 on:
   workflow_dispatch:
   push:
-    branches: [main, feat/flower-s3]
+    branches: [main, feat/flower-s3, feat/flower-recorded-audio]
     paths:
       - main/boards/flower-s3/**
       - main/application.*
