@@ -359,9 +359,10 @@ void Application::HandleActivationDoneEvent() {
     // that alert with the "ready" UI/sound — the main loop can process both
     // events back-to-back because the activation task is lower priority.
     const bool has_error = !last_error_message_.empty();
-    if (!startup_completed_) {
+    const bool first_startup = !startup_completed_ && !has_error;
+    if (first_startup) {
         startup_completed_ = true;
-        pending_startup_wake_word_hint_ = !has_error;
+        pending_startup_wake_word_hint_ = true;
     }
     if (!has_error) {
         auto display = Board::GetInstance().GetDisplay();
@@ -376,10 +377,21 @@ void Application::HandleActivationDoneEvent() {
     board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
 
     if (!has_error) {
-        Schedule([this]() {
-            // Play the success sound to indicate the device is ready
-            audio_service_.PlaySound(Lang::Sounds::OGG_SUCCESS);
-        });
+        Schedule([this, first_startup]() { PlayReadySound(first_startup); });
+    }
+}
+
+void Application::PlayReadySound(bool first_startup) {
+    // An error or user action may have arrived since activation queued this task.
+    if (!last_error_message_.empty()) {
+        return;
+    }
+    const auto sound = Board::GetInstance().GetStartupSound();
+    if (sound.empty()) {
+        audio_service_.PlaySound(Lang::Sounds::OGG_SUCCESS);
+    } else if (first_startup) {
+        ESP_LOGI(TAG, "Playing board startup ready sound");
+        PlayLocalAudio(sound);
     }
 }
 

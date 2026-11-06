@@ -76,7 +76,7 @@ class FlowerEmbeddedAssetsTest(unittest.TestCase):
             generate(path, header)
             self.assertIn("PHRASE_ANYTIME_99", header.read_text())
             self.assertIn("SESSION_START_99", header.read_text())
-            self.assertIn("std::array<Clip,6> SESSION_START", header.read_text())
+            self.assertIn("std::array<Clip,5> SESSION_START", header.read_text())
 
     def test_manifest_rejects_duplicate_missing_required_and_runtime_overflow(self):
         original = json.loads((ASSETS / "audio_manifest.json").read_text())
@@ -161,7 +161,7 @@ include("{ROOT}/main/boards/flower-s3/flower_assets.cmake")
 #include <cassert>
 int main() {
 using namespace Flower::Sounds;
-assert(CLOCK.size()==12 && PHRASE_ANYTIME.size()==19 && SESSION_START.size()==5);
+assert(CLOCK.size()==12 && PHRASE_ANYTIME.size()==19 && SESSION_START.size()==4 && STARTUP.size()==1);
 assert(CLOCK_01.substr(0,4)=="OggS" && GREETING_NIGHT.substr(0,4)=="OggS");
 }''')
             compiler = shlex.split(os.environ.get("CXX", "c++"))

@@ -496,9 +496,9 @@
       "title": "想跟我聊天吗"
     },
     {
-      "id": "SESSION_START_05",
-      "category": "session_start",
-      "file": "session_start_05.ogg",
+      "id": "STARTUP_READY",
+      "category": "startup",
+      "file": "startup_ready.ogg",
       "expected_duration_s": 1.526,
       "enabled": true,
       "placeholder": false,
