@@ -18,6 +18,7 @@
 
 #define BOOT_BUTTON_GPIO GPIO_NUM_0  // Onboard BOOT button
 #define MAIN_BUTTON_GPIO GPIO_NUM_1  // XIAO D0; external normally-open contact to GND
+#define RESTART_BUTTON_GPIO GPIO_NUM_2  // XIAO D1; external normally-open contact to GND
 #define BUILTIN_LED_GPIO GPIO_NUM_21
 #define BUILTIN_LED_OUTPUT_INVERT 1
 
