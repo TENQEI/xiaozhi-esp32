@@ -50,6 +50,7 @@ class NotifyPlayerTest(unittest.TestCase):
                     int sample_rate = 0, frame_duration = 0;
                     uint32_t playback_id = 0, media_position_ms = 0;
                     std::vector<uint8_t> payload;
+                    float playback_gain = 1.0f;
                 };
                 class AudioService {
                 public:
@@ -99,6 +100,7 @@ class NotifyPlayerTest(unittest.TestCase):
                 public:
                     static Board& GetInstance() { static Board b; return b; }
                     Network* GetNetwork() { return &network_; }
+                    float GetLocalPlaybackGain() const { return 1.5848932f; }
                 };
             """,
         }
@@ -127,7 +129,9 @@ class NotifyPlayerTest(unittest.TestCase):
                 assert(!player.StartLocal(sound, 8, done));
                 RunWorker();
                 assert(!audio.packets.empty() && calls == 0 && http_creations == 0);
-                for (const auto& p : audio.packets) assert(p.playback_id == 7);
+                for (const auto& p : audio.packets) {
+                    assert(p.playback_id == 7 && p.playback_gain == 1.5848932f);
+                }
                 player.OnPlaybackDrained();
                 assert(calls == 1 && result && completed == 7 && !player.IsBusy());
                 player.OnPlaybackDrained(); assert(calls == 1);
@@ -152,6 +156,7 @@ class NotifyPlayerTest(unittest.TestCase):
                 http_audio = sound;
                 std::string subtitle;
                 audio.on_push = [&](const AudioStreamPacket& p) {
+                    assert(p.playback_gain == 1.0f);
                     player.OnPlaybackProgress(p.playback_id, p.media_position_ms);
                     return true;
                 };

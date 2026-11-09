@@ -14,6 +14,7 @@ struct AudioStreamPacket {
     uint32_t playback_id = 0;
     uint32_t media_position_ms = 0;
     std::vector<uint8_t> payload;
+    float playback_gain = 1.0f;  // Device-side PCM gain, not serialized.
 };
 
 struct BinaryProtocol2 {

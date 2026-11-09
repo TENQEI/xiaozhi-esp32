@@ -205,8 +205,9 @@ void NotifyPlayer::WorkerTask() {
     uint32_t media_position_ms = 0;
     bool packet_error = false;
     const bool is_local = !local_audio.empty();
+    const float playback_gain = is_local ? Board::GetInstance().GetLocalPlaybackGain() : 1.0f;
     demuxer->OnPacket(
-        [this, playback_id, is_local, &media_position_ms, &packet_error](
+        [this, playback_id, is_local, playback_gain, &media_position_ms, &packet_error](
             const uint8_t* data, int sample_rate, int frame_duration_ms, size_t size) {
             if (packet_error || IsCancelled(playback_id) ||
                 // Permit codec pre-skip and final-frame padding around a 60 s clip.
@@ -219,6 +220,7 @@ void NotifyPlayer::WorkerTask() {
             packet->frame_duration = frame_duration_ms;
             packet->playback_id = playback_id;
             packet->media_position_ms = media_position_ms;
+            packet->playback_gain = playback_gain;
             packet->payload.assign(data, data + size);
             {
                 std::lock_guard<std::mutex> lock(mutex_);

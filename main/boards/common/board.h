@@ -81,6 +81,8 @@ public:
     virtual void OnClockTick() {}
     // Optional ready clip, played once after successful startup. Empty uses the native sound.
     virtual std::string_view GetStartupSound() { return {}; }
+    // Linear PCM gain for prerecorded clips played by NotifyPlayer.
+    virtual float GetLocalPlaybackGain() const { return 1.0f; }
     // Optional, application-task only. An empty view preserves native behavior.
     virtual std::string_view GetSessionSound(bool starting) {
         (void)starting;

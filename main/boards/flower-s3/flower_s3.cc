@@ -59,6 +59,7 @@ public:
 
     void OnClockTick() override { hourly_chime_.Tick(); }
     std::string_view GetStartupSound() override { return audio_manager_.StartupSound(); }
+    float GetLocalPlaybackGain() const override { return 1.5848932f; }  // +4 dB
     std::string_view GetSessionSound(bool starting) override {
         return audio_manager_.SessionSound(starting);
     }

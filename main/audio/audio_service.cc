@@ -1,5 +1,6 @@
 #include "audio_service.h"
 #include <esp_log.h>
+#include <algorithm>
 #include <cstring>
 
 #define RATE_CVT_CFG(_src_rate, _dest_rate, _channel)                                        \
@@ -439,6 +440,12 @@ void AudioService::OpusCodecTask() {
                                                 &actual_output);
                         resampled.resize(actual_output);
                         task.pcm = std::move(resampled);
+                    }
+                    if (packet->playback_gain != 1.0f) {
+                        for (auto& sample : task.pcm) {
+                            sample = static_cast<int16_t>(
+                                std::clamp(sample * packet->playback_gain, -32768.0f, 32767.0f));
+                        }
                     }
                     decoded = true;
                 } else {
