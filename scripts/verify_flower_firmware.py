@@ -41,7 +41,7 @@ def verify(manifest_path, elf, app, nm="xtensa-esp32s3-elf-nm", partition_bytes=
     size = Path(app).stat().st_size
     if size <= 0 or size > partition_bytes:
         raise ValueError(f"application exceeds OTA partition: {size}/{partition_bytes}")
-    return dict(audio_files=42, placeholder_files=sum(item["placeholder"] for item in manifest["audio"]),
+    return dict(audio_files=len(manifest["audio"]), placeholder_files=sum(item["placeholder"] for item in manifest["audio"]),
                 app_bytes=size, ota_partition_bytes=partition_bytes, free_bytes=partition_bytes-size)
 
 

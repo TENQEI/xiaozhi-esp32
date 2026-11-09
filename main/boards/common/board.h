@@ -79,6 +79,8 @@ public:
     virtual void SetNetworkEventCallback(NetworkEventCallback callback) { (void)callback; }
     // Application-task clock hook. Implementations must not block.
     virtual void OnClockTick() {}
+    // Optional ready clip, played once after successful startup. Empty uses the native sound.
+    virtual std::string_view GetStartupSound() { return {}; }
     // Optional, application-task only. An empty view preserves native behavior.
     virtual std::string_view GetSessionSound(bool starting) {
         (void)starting;

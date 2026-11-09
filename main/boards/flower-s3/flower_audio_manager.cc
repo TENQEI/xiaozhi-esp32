@@ -9,6 +9,10 @@
 namespace flower {
 namespace sounds = Flower::Sounds;
 
+std::string_view FlowerAudioManager::StartupSound() const {
+    return sounds::STARTUP_READY_ENABLED ? sounds::STARTUP_READY : std::string_view{};
+}
+
 bool FlowerAudioManager::AutomaticEnabled() const { return sounds::AUTOMATIC_ENABLED; }
 
 bool FlowerAudioManager::GreetingEnabled(bool morning) const {
