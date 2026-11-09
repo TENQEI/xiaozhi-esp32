@@ -5,6 +5,7 @@ on:
   push:
     branches: [main, feat/flower-s3, feat/flower-recorded-audio]
     paths:
+      - CMakeLists.txt
       - main/boards/flower-s3/**
       - main/application.*
       - main/notify/**
