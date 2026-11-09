@@ -51,7 +51,10 @@ public:
                 Application::GetInstance().Schedule([this]() { EnterWifiConfigMode(); });
             });
             button->OnDoubleClick([this]() {
-                Application::GetInstance().Schedule([this]() { audio_manager_.PlayPhrase(); });
+                Application::GetInstance().Schedule([this]() {
+                    hourly_chime_.ResetPhraseTimer();
+                    audio_manager_.PlayPhrase();
+                });
             });
         }
         InitializeTools();

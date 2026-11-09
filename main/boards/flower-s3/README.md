@@ -143,7 +143,7 @@ python scripts/generate_flower_placeholders.py
 
 正式录音按同名替换，清单中的 `placeholder` 改为 `false`，然后重新编译。
 `enabled: false` 可以停用某条音频；停用仍保留资源嵌入和清单完整性。
-`automatic_enabled: false` 关闭自动报时及早晚安，不影响手动定型文和会话音。
+`automatic_enabled: false` 关闭主动闲聊、自动报时及早晚安，不影响手动定型文和会话音。
 录音不支持网页上传或运行时替换。旧板级 `chimes/`、`greetings/`、`phrases/` 路径及
 `FLOWER_CHIME_SOURCE_DIR` 等打包选项已由新资源体系替代。
 
@@ -182,11 +182,13 @@ python scripts/generate_flower_placeholders.py
 修改时间不需要重新编译、打包或替换音频。免打扰只控制自动播报，手动双击仍可播放。
 网页提供自动播报总开关和时间配置，不提供音频修改。
 
-## 报时与早晚安总开关（MCP）
+## 自动播报总开关（MCP）
 
-新增一个总开关，同时控制整点报时、早安和晚安自动播报。默认开启；关闭后保留工作日/双休时间，
+总开关同时控制主动闲聊、整点报时、早安和晚安。沿用已保存的开关状态，首次使用默认开启。关闭后保留工作日/双休时间，
 不影响手动双击定型文、连续对话和会话起止音。切换保存到 NVS，重启保留；开启不立即播放，也不补播。
 原有时间 NVS 键和迁移逻辑不变，新开关单独保存在 `flower_time/announce_on`。
+主动闲聊在设备校时后等待随机 30–90 分钟的连续空闲，从当前时段及全天定型文中选一句。
+对话、播放、手动双击及免打扰会重置等待。临近整点或晚安时跳过本次随机播报，给计划播报留出播放时间。
 资源清单的 `automatic_enabled` 仍为构建时总限制，需保持 `true` 才能自动播放。
 
 | 设备 MCP 工具 | 参数 | 返回 |
@@ -196,14 +198,14 @@ python scripts/generate_flower_placeholders.py
 
 这两个工具默认对模型可见。服务端接收设备 MCP 工具后，以下说法对应同一开关：
 
-- “打开报时”“打开闹钟”：调用 `self.flower.set_announcements_enabled`，参数 `{"enabled":true}`。
-- “关闭报时”“关闭闹钟”：同一工具，参数 `{"enabled":false}`。
+- “打开报时”“打开闹钟”“打开主动闲聊”“打开闲聊”“开启闲聊”“打开早晚安”：调用 `self.flower.set_announcements_enabled`，参数 `{"enabled":true}`。
+- “关闭报时”“关闭闹钟”“关闭主动闲聊”“关闭闲聊”“关闭早晚安”：同一工具，参数 `{"enabled":false}`。
 - “报时打开了吗”：调用 `self.flower.get_announcements`。
 
 语义识别由服务端模型/工具路由完成；固件不硬编码 ASR 文本匹配，也不新增任意时刻闹钟。
 服务端应在收到成功结果后确认完成，不能把仅有语音回复视为设置成功。
 
-网页 `http://设备IP:8080/` 上的“启用报时与早晚安”与 MCP 使用同一设置。
+网页 `http://设备IP:8080/` 上的“启用主动闲聊、报时与早晚安”与 MCP 使用同一设置。
 `GET /api/announcements` 查询；`POST /api/announcements` 接收 `{"enabled":true/false}`，
 沿用页面令牌、Host 和 JSON 校验。原有 `/api/times` 格式保持不变，保存时间不会重置总开关。
 关闭总开关不停止正在播放的声音，仅阻止后续自动播报；免打扰时间范围仍保留。

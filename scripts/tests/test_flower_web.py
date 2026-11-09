@@ -99,6 +99,8 @@ class FlowerWebTest(unittest.TestCase):
                     #pragma once
                     #include <cstring>
                     inline void esp_fill_random(void* out, size_t size) { std::memset(out, 42, size); }
+                    inline unsigned phrase_random = 0;
+                    inline unsigned esp_random() { return phrase_random; }
                 ''',
                 "esp_netif.h": r'''
                     #pragma once
@@ -219,12 +221,24 @@ class FlowerWebTest(unittest.TestCase):
                 };
                 #endif
             '''
+            headers["esp_timer.h"] = r'''
+                #pragma once
+                #include <cstdint>
+                inline int64_t monotonic_us = 0;
+                inline int64_t esp_timer_get_time() { return monotonic_us; }
+            '''
             headers["application.h"] = r'''
                 #pragma once
                 constexpr int kDeviceStateIdle=0;
+                inline bool device_idle = true, playback_idle = true;
+                class AudioService {public:
+                    bool IsPlaybackIdle(){return playback_idle;}
+                };
                 class Application {public:
+                    AudioService audio;
+                    AudioService& GetAudioService(){return audio;}
                     static Application& GetInstance(){static Application app;return app;}
-                    int GetDeviceState(){return kDeviceStateIdle;}
+                    int GetDeviceState(){return device_idle ? kDeviceStateIdle : 1;}
                 };
             '''
             for name, content in headers.items():
@@ -239,15 +253,19 @@ class FlowerWebTest(unittest.TestCase):
                 #include "hourly_chime.h"
                 #include "nvs.h"
                 #include "esp_netif.h"
+                #include "esp_random.h"
+                #include "esp_timer.h"
+                #include "application.h"
                 #include <thread>
                 using namespace flower;
-                int clocks=0,greetings=0;
+                int clocks=0,greetings=0,phrases=0;
                 std::time_t now=0;
                 extern "C" std::time_t time(std::time_t* value) noexcept {if(value)*value=now;return now;}
                 bool FlowerAudioManager::AutomaticEnabled() const{return true;}
                 bool FlowerAudioManager::GreetingEnabled(bool) const{return true;}
                 bool FlowerAudioManager::PlayClock(int){++clocks;return true;}
                 bool FlowerAudioManager::PlayGreeting(bool){++greetings;return true;}
+                void FlowerAudioManager::PlayPhrase(){++phrases;}
                 int main() {
                     GreetingTimeSettings times;
                     assert(times.Get().morning == 480 && times.Get().night == 1200);
@@ -413,6 +431,60 @@ class FlowerWebTest(unittest.TestCase):
                     assert(greetings==1 && clocks==0);
                     now=day+1440*60+540*60-1;automatic.Tick();++now;automatic.Tick();assert(clocks==1);
                     now=day+1440*60+1200*60-1;automatic.Tick();++now;automatic.Tick();assert(greetings==2);
+
+                    // One switch gates the three scheduled cues and random chatter.
+                    HourlyChime chatter(times, audio);
+                    auto tick = [&](int minute, int elapsed) {
+                        now = day + 2 * 86400 + minute * 60 + 15;
+                        monotonic_us = static_cast<int64_t>(elapsed) * 1000000;
+                        chatter.Tick();
+                    };
+                    now = 0;
+                    chatter.Tick();
+                    tick(490, 0);
+                    tick(510, 1799);
+                    assert(phrases == 0);
+                    tick(520, 1800);
+                    assert(phrases == 1);
+                    assert(set(false));
+                    tick(530, 1801);
+                    tick(590, 6000);
+                    assert(phrases == 1);
+                    assert(set(true));
+                    tick(600, 6001);
+                    device_idle = false;
+                    tick(620, 7801);
+                    assert(phrases == 1);
+                    device_idle = true;
+                    tick(621, 7802);
+                    playback_idle = false;
+                    tick(650, 9602);
+                    assert(phrases == 1);
+                    playback_idle = true;
+                    tick(651, 9603);
+                    tick(1200, 11403);
+                    assert(phrases == 1);
+                    tick(490, 11404);
+                    tick(519, 13203);
+                    assert(phrases == 1);
+                    tick(520, 13204);
+                    assert(phrases == 2);
+
+                    // The maximum draw is 90 minutes; a manual play resets the timer.
+                    phrase_random = 3600;
+                    tick(521, 13205);
+                    chatter.ResetPhraseTimer();
+                    tick(525, 14000);
+                    tick(615, 19399);
+                    assert(phrases == 2);
+                    tick(615, 19400);
+                    assert(phrases == 3);
+
+                    // An imminent evening greeting reserves its playback window.
+                    phrase_random = 0;
+                    tick(1150, 19401);
+                    tick(1199, 21201);
+                    assert(phrases == 3);
 
                     // A reader sees both time pairs together, never a mixed version.
                     GreetingSchedule first{{1,2}, {3,4}};

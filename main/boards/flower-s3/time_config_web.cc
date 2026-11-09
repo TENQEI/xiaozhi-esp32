@@ -16,7 +16,7 @@ constexpr int kPort = 8080;
 constexpr char kPage[] = R"HTML(<!doctype html>
 <html lang="zh-CN"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>报时与早晚安设置</title>
+<title>自动播报设置</title>
 <style>
 body{font:17px system-ui,sans-serif;max-width:460px;margin:48px auto;padding:0 24px;color:#222;background:#f7f7f4}
 form{background:white;border-radius:16px;padding:24px}label{display:flex;justify-content:space-between;align-items:center;margin:18px 0}
@@ -24,11 +24,11 @@ input,button{font:inherit;padding:10px;border:1px solid #aaa;border-radius:8px}b
 fieldset{border:1px solid #ddd;border-radius:8px;margin:16px 0;padding:0 12px}
 button:disabled{opacity:.5}p{line-height:1.6}#status{min-height:3em;white-space:pre-line}
 </style>
-<h1>报时与早晚安设置</h1>
+<h1>自动播报设置</h1>
 <p>使用设备校时后的本地时间。晚安后进入免打扰，早安时结束免打扰。</p>
-<label>启用报时与早晚安 <input id="announcements" type="checkbox" disabled></label>
+<label>启用主动闲聊、报时与早晚安 <input id="announcements" type="checkbox" disabled></label>
 <p id="announcement_status" role="status" aria-live="polite">正在读取开关…</p>
-<p>关闭后停止整点报时、早安和晚安；保留时间设置，手动定型文和对话不受影响。</p>
+<p>关闭后停止主动闲聊、整点报时、早安和晚安；保留时间设置，手动定型文和对话不受影响。</p>
 <form id="form">
 <p>按星期自动切换：工作日为周一至周五，双休为周六、周日。</p>
 <fieldset><legend>工作日（周一至周五）</legend>
@@ -57,14 +57,14 @@ async function request(options,url='/api/times'){
 const announcements=document.getElementById('announcements'),announcementStatus=document.getElementById('announcement_status');
 request(undefined,'/api/announcements').then(s=>{
   announcements.checked=s.enabled;announcements.disabled=false;
-  announcementStatus.textContent=s.enabled?'报时与早晚安已打开。':'报时与早晚安已关闭。';
-}).catch(()=>announcementStatus.textContent='读取报时开关失败，请刷新页面。');
+  announcementStatus.textContent=s.enabled?'自动播报已打开。':'自动播报已关闭。';
+}).catch(()=>announcementStatus.textContent='读取自动播报开关失败，请刷新页面。');
 announcements.addEventListener('change',async()=>{
   const enabled=announcements.checked;announcements.disabled=true;
   try{
     const saved=await request({method:'POST',headers:{'Content-Type':'application/json','X-Flower-Token':token},body:JSON.stringify({enabled})},'/api/announcements');
     announcements.checked=saved.enabled;
-    announcementStatus.textContent=saved.enabled?'已打开报时与早晚安，下次到点生效，不补播。':'已关闭报时与早晚安，时间设置保留。';
+    announcementStatus.textContent=saved.enabled?'已打开自动播报。主动闲聊会等待随机间隔。':'已关闭自动播报，时间设置保留。';
   }catch{announcements.checked=!enabled;announcementStatus.textContent='未确认开关保存成功，请刷新页面核对。'}
   finally{announcements.disabled=false}
 });

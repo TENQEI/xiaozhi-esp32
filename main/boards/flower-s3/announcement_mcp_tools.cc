@@ -18,15 +18,15 @@ ToolResult Status(const GreetingTimeSettings& settings) {
 void InitializeAnnouncementTools(GreetingTimeSettings& settings) {
     auto& server = McpServer::GetInstance();
     server.AddTool("self.flower.get_announcements",
-                   "查询报时/闹钟总开关。该开关同时控制整点报时、早安和晚安自动播报。",
-                   PropertyList(),
+                   "查询自动播报总开关，包含主动闲聊、整点报时、早安和晚安。", PropertyList(),
                    [&settings](const PropertyList&) -> ToolResult { return Status(settings); });
     server.AddTool(
         "self.flower.set_announcements_enabled",
-        "设置报时/闹钟总开关，同时控制整点报时、早安和晚安自动播报。"
-        "用户说“打开报时”“开启报时”“打开闹钟”时，enabled=true；"
-        "说“关闭报时”“关闭闹钟”时，enabled=false。"
-        "立即保存，重启保留；开启不立即播放、不补播。"
+        "设置自动播报总开关，同时控制主动闲聊、整点报时、早安和晚安。"
+        "用户说“打开报时”“开启报时”“打开闹钟”“打开主动闲聊”“打开闲聊”“开启闲聊”“打开早晚安”时，enab"
+        "led=true；"
+        "说“关闭报时”“关闭闹钟”“关闭主动闲聊”“关闭闲聊”“关闭早晚安”时，enabled=false。"
+        "保存后重启保留。开启后按时间表播报，主动闲聊等待随机间隔。"
         "这不是新增指定时刻的闹钟，不影响手动定型文、对话或既有时间设置。",
         PropertyList({Property("enabled", kPropertyTypeBoolean)}),
         [&settings](const PropertyList& properties) -> ToolResult {
