@@ -96,6 +96,13 @@ public:
      * Sends MAIN_EVENT_TOGGLE_CHAT to be handled in Run()
      */
     void ToggleChatState();
+    // Application-task only: capture the button-triggered utterance while connecting.
+    bool BeginBufferedConversation();
+    bool PrepareForNetworkSleep();
+    void ConnectBufferedConversation();
+    void CancelBufferedConversation();
+    bool IsConnectionOpening() const { return buffered_open_in_progress_; }
+    bool HasBufferedConversation() const { return buffered_conversation_; }
 
     /**
      * Start listening (event-based, thread-safe)
@@ -137,7 +144,7 @@ private:
 
     std::mutex mutex_;
     std::deque<std::function<void()>> main_tasks_;
-    std::unique_ptr<Protocol> protocol_;
+    std::shared_ptr<Protocol> protocol_;
     EventGroupHandle_t event_group_ = nullptr;
     esp_timer_handle_t clock_timer_handle_ = nullptr;
     esp_timer_handle_t startup_wake_word_hint_timer_ = nullptr;
@@ -164,6 +171,9 @@ private:
     bool assets_version_checked_ = false;
     bool play_popup_on_listening_ = false;  // Flag to play popup sound after state changes to listening
     bool pending_listening_start_ = false;  // Waiting for playback to drain before starting listening (auto mode)
+    std::atomic<bool> buffered_open_in_progress_{false};
+    void FinishBufferedConnection(std::shared_ptr<Protocol> protocol, bool connected);
+    bool buffered_conversation_ = false;
     int clock_ticks_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;
 

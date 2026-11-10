@@ -2,6 +2,7 @@
 #include <esp_log.h>
 #include <algorithm>
 #include <cstring>
+#include "board.h"
 
 #define RATE_CVT_CFG(_src_rate, _dest_rate, _channel)                                        \
     (esp_ae_rate_cvt_cfg_t) {                                                                \
@@ -501,10 +502,21 @@ void AudioService::OpusCodecTask() {
                             std::lock_guard<std::mutex> lock2(audio_queue_mutex_);
                             /* Never let a full send queue stall encoding: stale realtime
                              * audio is useless to the server, so drop the oldest packet. */
-                            if (audio_send_queue_.size() >= MAX_SEND_PACKETS_IN_QUEUE) {
-                                audio_send_queue_.pop_front();
+                            if (task.capture_generation != capture_generation_) {
+                                // A cancelled connection must not leak an in-flight frame.
+                            } else if (buffering_microphone_ || draining_microphone_) {
+                                // Keep the start of the utterance if connection is slow.
+                                if (!audio_send_queue_.full()) {
+                                    audio_send_queue_.push_back(std::move(packet));
+                                } else {
+                                    microphone_buffer_overflowed_ = true;
+                                }
+                            } else {
+                                if (audio_send_queue_.size() >= MAX_SEND_PACKETS_IN_QUEUE) {
+                                    audio_send_queue_.pop_front();
+                                }
+                                audio_send_queue_.push_back(std::move(packet));
                             }
-                            audio_send_queue_.push_back(std::move(packet));
                         }
                         if (callbacks_.on_send_queue_available) {
                             callbacks_.on_send_queue_available();
@@ -583,6 +595,10 @@ void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t
         /* Push the task to the encode queue */
         std::unique_lock<std::mutex> lock(audio_queue_mutex_);
 
+        task.capture_generation = capture_generation_;
+        if (type == kAudioTaskTypeEncodeToSendQueue && !IsAudioProcessorRunning())
+            return;
+
         /* If the task is to send queue, we need to set the timestamp */
         if (type == kAudioTaskTypeEncodeToSendQueue && !timestamp_queue_.empty()) {
             task.timestamp = timestamp_queue_.front();
@@ -637,11 +653,14 @@ bool AudioService::PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> pa
 
 std::unique_ptr<AudioStreamPacket> AudioService::PopPacketFromSendQueue() {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
-    if (audio_send_queue_.empty()) {
+    if (buffering_microphone_ || audio_send_queue_.empty()) {
         return nullptr;
     }
     auto packet = std::move(audio_send_queue_.front());
     audio_send_queue_.pop_front();
+    if (audio_send_queue_.empty()) {
+        draining_microphone_ = false;
+    }
     audio_queue_cv_.notify_all();
     return packet;
 }
@@ -670,6 +689,7 @@ std::unique_ptr<AudioStreamPacket> AudioService::PopWakeWordPacket() {
 }
 
 void AudioService::EnableWakeWordDetection(bool enable) {
+    enable = enable && Board::GetInstance().UsesWakeWord();
     ESP_LOGD(TAG, "%s wake word detection", enable ? "Enabling" : "Disabling");
     if (enable) {
         if (!InitializeAudioEngine()) {
@@ -700,6 +720,8 @@ void AudioService::EnableWakeWordDetection(bool enable) {
             audio_engine_->EnableWakeWordDetection(false);
         }
         xEventGroupClearBits(event_group_, AS_EVENT_WAKE_WORD_RUNNING);
+        if (!Board::GetInstance().UsesWakeWord())
+            xEventGroupSetBits(event_group_, AS_EVENT_AUDIO_INPUT_STOP_REQUEST);
     }
 }
 
@@ -739,6 +761,66 @@ void AudioService::EnableVoiceProcessing(bool enable) {
             audio_engine_->EnableVoiceProcessing(false);
         }
         xEventGroupClearBits(event_group_, AS_EVENT_AUDIO_PROCESSOR_RUNNING);
+        if (!Board::GetInstance().UsesWakeWord()) {
+            xEventGroupSetBits(event_group_, AS_EVENT_AUDIO_INPUT_STOP_REQUEST);
+        }
+    }
+}
+
+bool AudioService::PrepareForSleep() {
+    // Input is stopped by its owning task. Never stop a live I2S read here.
+    if (IsAudioProcessorRunning() || IsWakeWordRunning() || codec_->input_enabled())
+        return false;
+    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    if (!IsPlaybackDrainedLocked() || !audio_encode_queue_.empty())
+        return false;
+    // i2s_channel_write returns after enqueueing DMA, before the last sample plays.
+    if (std::chrono::steady_clock::now() - last_output_time_ < std::chrono::milliseconds(100))
+        return false;
+    codec_->EnableOutput(false);
+    esp_timer_stop(audio_power_timer_);
+    return true;
+}
+
+bool AudioService::MicrophoneBufferOverflowed() {
+    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    return microphone_buffer_overflowed_;
+}
+
+bool AudioService::BeginMicrophoneBuffer() {
+    {
+        std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+        ++capture_generation_;
+        audio_encode_queue_.clear();
+        audio_send_queue_.clear();
+        microphone_buffer_overflowed_ = false;
+        buffering_microphone_ = true;
+        draining_microphone_ = false;
+    }
+    EnableVoiceProcessing(true);
+    if (IsAudioProcessorRunning()) {
+        return true;
+    }
+    EndMicrophoneBuffer(false);
+    return false;
+}
+
+void AudioService::EndMicrophoneBuffer(bool send) {
+    {
+        std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+        if (!buffering_microphone_) {
+            return;
+        }
+        buffering_microphone_ = false;
+        draining_microphone_ = send && !audio_send_queue_.empty();
+        if (!send) {
+            ++capture_generation_;
+            audio_encode_queue_.clear();
+            audio_send_queue_.clear();
+        }
+    }
+    if (send && callbacks_.on_send_queue_available) {
+        callbacks_.on_send_queue_available();
     }
 }
 

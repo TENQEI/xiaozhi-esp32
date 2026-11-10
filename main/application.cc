@@ -299,6 +299,7 @@ void Application::Run() {
             HideStartupWakeWordHint();
         }
         ShowStartupWakeWordHint();
+        Board::GetInstance().OnApplicationEvent();
     }
 }
 
@@ -608,6 +609,10 @@ void Application::InitializeProtocol() {
     });
 
     protocol_->OnAudioChannelClosed([this, &board]() {
+        // The handshake worker owns the channel until its completion is handled.
+        // Its cancellation close must not enqueue an event for a later session.
+        if (buffered_open_in_progress_.load())
+            return;
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
         Schedule([this]() { HandleAudioChannelClosed(); });
     });
@@ -809,11 +814,111 @@ void Application::DismissAlert() {
 
 void Application::ToggleChatState() { xEventGroupSetBits(event_group_, MAIN_EVENT_TOGGLE_CHAT); }
 
+bool Application::PrepareForNetworkSleep() {
+    if (buffered_conversation_ || !CanEnterSleepMode())
+        return false;
+    if (!audio_service_.PrepareForSleep())
+        return false;
+    if (protocol_)
+        protocol_->SuspendNetwork();
+    return true;
+}
+
+bool Application::BeginBufferedConversation() {
+    if (GetDeviceState() == kDeviceStateNotifying)
+        StopNotification();
+    if (buffered_open_in_progress_ || buffered_conversation_ ||
+        GetDeviceState() != kDeviceStateIdle || !audio_service_.IsPlaybackIdle()) {
+        return false;
+    }
+    DismissAlert();
+    buffered_conversation_ = audio_service_.BeginMicrophoneBuffer();
+    if (buffered_conversation_) {
+        SetDeviceState(kDeviceStateConnecting);
+    }
+    return buffered_conversation_;
+}
+
+void Application::ConnectBufferedConversation() {
+    if (buffered_open_in_progress_)
+        return;
+    if (!buffered_conversation_ || !protocol_ || GetDeviceState() != kDeviceStateConnecting) {
+        CancelBufferedConversation();
+        return;
+    }
+    Board::GetInstance().SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
+    // Keep the main loop responsive to cancel/D1 while the server handshake waits.
+    using Context = std::pair<Application*, std::shared_ptr<Protocol>>;
+    auto* context = new Context(this, protocol_);
+    buffered_open_in_progress_ = true;
+    if (xTaskCreate(
+            [](void* arg) {
+                std::unique_ptr<Context> context(static_cast<Context*>(arg));
+                auto* app = context->first;
+                auto protocol = context->second;
+                const bool connected =
+                    protocol->IsAudioChannelOpened() || protocol->OpenAudioChannel();
+                app->Schedule([app, protocol, connected]() {
+                    app->FinishBufferedConnection(protocol, connected);
+                });
+                context.reset();
+                protocol.reset();
+                vTaskDelete(nullptr);
+            },
+            "flower_connect", 8192, context, 2, nullptr) != pdPASS) {
+        delete context;
+        buffered_open_in_progress_ = false;
+        CancelBufferedConversation();
+    }
+}
+
+void Application::FinishBufferedConnection(std::shared_ptr<Protocol> protocol, bool connected) {
+    if (!buffered_conversation_ || protocol != protocol_ ||
+        GetDeviceState() != kDeviceStateConnecting) {
+        protocol->CloseAudioChannel();
+        CancelBufferedConversation();
+        buffered_open_in_progress_ = false;
+        return;
+    }
+    if (!connected || !protocol->IsAudioChannelOpened() ||
+        audio_service_.MicrophoneBufferOverflowed()) {
+        CancelBufferedConversation();
+        protocol->CloseAudioChannel();
+        buffered_open_in_progress_ = false;
+        SetDeviceState(kDeviceStateIdle);
+        if (last_error_message_.empty())
+            PlaySound(Lang::Sounds::OGG_EXCLAMATION);
+        return;
+    }
+    buffered_open_in_progress_ = false;
+    session_.Begin();
+    play_popup_on_listening_ = true;  // Send listen-start before releasing buffered packets.
+    suppress_next_popup_ = true;      // The user is already speaking.
+    SetListeningMode(GetDefaultListeningMode());
+}
+
+void Application::CancelBufferedConversation() {
+    if (!buffered_conversation_) {
+        return;
+    }
+    buffered_conversation_ = false;
+    audio_service_.EnableVoiceProcessing(false);
+    audio_service_.EndMicrophoneBuffer(false);
+    if (GetDeviceState() == kDeviceStateConnecting)
+        SetDeviceState(kDeviceStateIdle);
+}
+
 void Application::StartListening() { xEventGroupSetBits(event_group_, MAIN_EVENT_START_LISTENING); }
 
 void Application::StopListening() { xEventGroupSetBits(event_group_, MAIN_EVENT_STOP_LISTENING); }
 
 void Application::HandleToggleChatEvent() {
+    if (buffered_conversation_) {
+        CancelBufferedConversation();
+        return;
+    }
+    if (buffered_open_in_progress_)
+        return;
     auto state = GetDeviceState();
     if (session_.IsClosing())
         return;
@@ -888,6 +993,8 @@ void Application::ContinueOpenAudioChannel(ListeningMode mode) {
 }
 
 void Application::HandleStartListeningEvent() {
+    if (buffered_open_in_progress_ || buffered_conversation_)
+        return;
     auto state = GetDeviceState();
 
     if (state == kDeviceStateNotifying) {
@@ -1107,11 +1214,16 @@ void Application::CancelSessionSound() {
 }
 
 void Application::CancelConversation() {
+    CancelBufferedConversation();
     session_.Cancel();
     CancelSessionSound();
 }
 
 void Application::HandleAudioChannelClosed() {
+    // A stale close from a cancelled handshake must not end a new conversation.
+    if (buffered_open_in_progress_)
+        return;
+    CancelBufferedConversation();
     const bool normal_end = session_.Closed();
     CancelSessionSound();
     const auto state = GetDeviceState();
@@ -1154,7 +1266,9 @@ void Application::HandleStateChangedEvent() {
                 display->SetEmotion(
                     "neutral");  // Then set emotion (wechat mode checks child count)
             }
-            audio_service_.EnableVoiceProcessing(false);
+            if (!buffered_conversation_) {
+                audio_service_.EnableVoiceProcessing(false);
+            }
             audio_service_.EnableWakeWordDetection(true);
             break;
         case kDeviceStateConnecting:
@@ -1281,9 +1395,23 @@ void Application::StartListeningAudio() {
         return;
     }
 
+    // The main loop may reach this after connection completion was scheduled.
+    // Recheck before sending: capture can fill the buffer in that interval.
+    if (buffered_conversation_ && audio_service_.MicrophoneBufferOverflowed()) {
+        CancelConversation();
+        protocol_->CloseAudioChannel();
+        SetDeviceState(kDeviceStateIdle);
+        PlaySound(Lang::Sounds::OGG_EXCLAMATION);
+        return;
+    }
     // Send the start listening command
     protocol_->SendStartListening(listening_mode_);
-    audio_service_.EnableVoiceProcessing(true);
+    if (buffered_conversation_) {
+        buffered_conversation_ = false;
+        audio_service_.EndMicrophoneBuffer(true);
+    } else {
+        audio_service_.EnableVoiceProcessing(true);
+    }
 
     ConfigureWakeWordForListening();
 
@@ -1337,7 +1465,8 @@ bool Application::StartNotification(std::string audio_url, std::vector<NotifySub
     }
 
     auto& board = Board::GetInstance();
-    board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
+    board.SetPowerSaveLevel(local_audio.empty() ? PowerSaveLevel::PERFORMANCE
+                                                : board.LocalPlaybackPowerLevel());
     audio_service_.EnableVoiceProcessing(false);
     audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
     audio_service_.ReleaseWakeWordResources();
@@ -1445,6 +1574,8 @@ void Application::Reboot() {
 }
 
 bool Application::UpgradeFirmware(const std::string& url, const std::string& version) {
+    if (buffered_open_in_progress_)
+        return false;
     CancelConversation();
     auto& board = Board::GetInstance();
     auto display = board.GetDisplay();
@@ -1538,6 +1669,8 @@ void Application::WakeWordInvoke(const std::string& wake_word) {
 }
 
 bool Application::CanEnterSleepMode() {
+    if (buffered_open_in_progress_ || buffered_conversation_)
+        return false;
     if (GetDeviceState() != kDeviceStateIdle) {
         return false;
     }

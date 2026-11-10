@@ -29,6 +29,7 @@ public:
     ~MqttProtocol();
 
     bool Start() override;
+    void SuspendNetwork() override;
     bool SendAudio(std::unique_ptr<AudioStreamPacket> packet) override;
     bool OpenAudioChannel() override;
     void CloseAudioChannel(bool send_goodbye = true) override;
@@ -58,6 +59,7 @@ private:
     uint32_t remote_sequence_;
     esp_timer_handle_t reconnect_timer_;
 
+    std::atomic<bool> network_suspended_{false};
     bool StartMqttClient(bool report_error=false);
     void ParseServerHello(const cJSON* root);
     bool DecodeHexString(const std::string& hex_string, std::string& decoded);

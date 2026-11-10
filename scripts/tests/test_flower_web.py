@@ -43,8 +43,8 @@ class FlowerWebTest(unittest.TestCase):
                 ''',
                 "esp_log.h": r'''
                     #pragma once
-                    #define ESP_LOGI(...) ((void)0)
-                    #define ESP_LOGW(...) ((void)0)
+                    #define ESP_LOGI(tag, ...) ((void)(tag))
+                    #define ESP_LOGW(tag, ...) ((void)(tag))
                 ''',
                 "nvs.h": r'''
                     #pragma once
@@ -260,7 +260,11 @@ class FlowerWebTest(unittest.TestCase):
                 using namespace flower;
                 int clocks=0,greetings=0,phrases=0;
                 std::time_t now=0;
-                extern "C" std::time_t time(std::time_t* value) noexcept {if(value)*value=now;return now;}
+                extern "C" std::time_t time(std::time_t* value)
+#ifndef __APPLE__
+                    noexcept
+#endif
+                {if(value)*value=now;return now;}
                 bool FlowerAudioManager::AutomaticEnabled() const{return true;}
                 bool FlowerAudioManager::GreetingEnabled(bool) const{return true;}
                 bool FlowerAudioManager::PlayClock(int){++clocks;return true;}

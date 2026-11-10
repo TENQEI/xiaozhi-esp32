@@ -42,6 +42,7 @@
 #define MAX_PLAYBACK_TASKS_IN_QUEUE 2
 #define MAX_DECODE_PACKETS_IN_QUEUE (1200 / OPUS_FRAME_DURATION_MS)
 #define MAX_SEND_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
+#define MAX_BUFFERED_MIC_PACKETS (10000 / OPUS_FRAME_DURATION_MS)
 #define AUDIO_TESTING_MAX_DURATION_MS 10000
 #define MAX_TIMESTAMPS_IN_QUEUE 3
 
@@ -99,6 +100,7 @@ struct AudioTask {
     AudioTaskType type;
     std::vector<int16_t> pcm;
     uint32_t timestamp = 0;
+    uint32_t capture_generation = 0;
     uint32_t playback_id = 0;
     uint32_t media_position_ms = 0;
 };
@@ -137,6 +139,10 @@ public:
     void EnableWakeWordDetection(bool enable);
     void ReleaseWakeWordResources();
     void EnableVoiceProcessing(bool enable);
+    bool BeginMicrophoneBuffer();
+    bool MicrophoneBufferOverflowed();
+    bool PrepareForSleep();
+    void EndMicrophoneBuffer(bool send);
     void EnableAudioTesting(bool enable);
     void EnableDeviceAec(bool enable);
 
@@ -186,7 +192,11 @@ private:
     static constexpr size_t kAudioTestingPacketCapacity =
         AUDIO_TESTING_MAX_DURATION_MS / OPUS_FRAME_DURATION_MS;
     FixedQueue<std::unique_ptr<AudioStreamPacket>, kAudioTestingPacketCapacity> audio_decode_queue_;
-    FixedQueue<std::unique_ptr<AudioStreamPacket>, MAX_SEND_PACKETS_IN_QUEUE> audio_send_queue_;
+    FixedQueue<std::unique_ptr<AudioStreamPacket>, MAX_BUFFERED_MIC_PACKETS> audio_send_queue_;
+    bool buffering_microphone_ = false;  // Protected by audio_queue_mutex_.
+    bool draining_microphone_ = false;
+    bool microphone_buffer_overflowed_ = false;
+    uint32_t capture_generation_ = 0;
     FixedQueue<std::unique_ptr<AudioStreamPacket>, kAudioTestingPacketCapacity>
         audio_testing_queue_;
     FixedQueue<AudioTask, MAX_ENCODE_TASKS_IN_QUEUE> audio_encode_queue_;

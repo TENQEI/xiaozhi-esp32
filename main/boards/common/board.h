@@ -76,9 +76,12 @@ public:
     virtual Camera* GetCamera();
     virtual NetworkInterface* GetNetwork() = 0;
     virtual void StartNetwork() = 0;
+    virtual bool UsesWakeWord() const { return true; }
     virtual void SetNetworkEventCallback(NetworkEventCallback callback) { (void)callback; }
     // Application-task clock hook. Implementations must not block.
     virtual void OnClockTick() {}
+    virtual void OnApplicationEvent() {}
+    virtual PowerSaveLevel LocalPlaybackPowerLevel() const { return PowerSaveLevel::PERFORMANCE; }
     // Optional ready clip, played once after successful startup. Empty uses the native sound.
     virtual std::string_view GetStartupSound() { return {}; }
     // Linear PCM gain for prerecorded clips played by NotifyPlayer.

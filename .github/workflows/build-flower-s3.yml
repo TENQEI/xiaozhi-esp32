@@ -9,7 +9,8 @@ on:
       - main/boards/flower-s3/**
       - main/application.*
       - main/notify/**
-      - main/audio/session_lifecycle.h
+      - main/audio/**
+      - main/protocols/**
       - main/assets/flower/**
       - scripts/gen_flower_audio.py
       - scripts/generate_flower_placeholders.py
@@ -39,7 +40,7 @@ jobs:
         run: apt-get update && apt-get install -y --no-install-recommends ffmpeg g++ binutils libcjson-dev libmbedtls-dev
       - name: Test build tooling
         run: python -m unittest discover -s scripts/tests -v
-      - name: Build Chinese firmware with voice wake-up
+      - name: Build Chinese button-activated firmware
         shell: bash
         run: |
           source "$IDF_PATH/export.sh"

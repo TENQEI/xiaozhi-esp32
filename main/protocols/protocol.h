@@ -58,6 +58,8 @@ public:
     void OnDisconnected(std::function<void()> callback);
 
     virtual bool Start() = 0;
+    // Called only after the audio channel has closed, before intentional radio shutdown.
+    virtual void SuspendNetwork() {}
     virtual bool OpenAudioChannel() = 0;
     virtual void CloseAudioChannel(bool send_goodbye = true) = 0;
     virtual bool IsAudioChannelOpened() const = 0;
