@@ -5,6 +5,7 @@
 #include "config.h"
 #include "hourly_chime.h"
 #include "led/gpio_led.h"
+#include "microphone_filter.h"
 #include "time_config_web.h"
 #include "wifi_board.h"
 
@@ -14,6 +15,7 @@ class FlowerS3Board : public WifiBoard {
 private:
     Button boot_button_{BOOT_BUTTON_GPIO, false, 3000};
     Button main_button_{MAIN_BUTTON_GPIO, false, 3000};
+    Button restart_button_{RESTART_BUTTON_GPIO};
     flower::GreetingTimeSettings greeting_times_;
     flower::FlowerAudioManager audio_manager_;
     flower::HourlyChime hourly_chime_{greeting_times_, audio_manager_};
@@ -22,12 +24,23 @@ private:
     void InitializeTools() { flower::InitializeAnnouncementTools(greeting_times_); }
 
     class FlowerAudioCodec : public NoAudioCodecSimplex {
+    protected:
+        int Read(int16_t* dest, int samples) override {
+            const int count = NoAudioCodecSimplex::Read(dest, samples);
+            microphone_filter_.Process(dest, count);
+            return count;
+        }
+
+    private:
+        flower::MicrophoneFilter microphone_filter_;
+
     public:
         FlowerAudioCodec()
             : NoAudioCodecSimplex(AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE,
                                   AUDIO_I2S_SPK_GPIO_BCLK, AUDIO_I2S_SPK_GPIO_LRCK,
                                   AUDIO_I2S_SPK_GPIO_DOUT, AUDIO_I2S_MIC_GPIO_SCK,
                                   AUDIO_I2S_MIC_GPIO_WS, AUDIO_I2S_MIC_GPIO_DIN) {
+            static_assert(AUDIO_INPUT_SAMPLE_RATE == flower::MicrophoneFilter::kSampleRate);
             // Start quietly on a new device; AudioCodec::Start restores saved volume.
             output_volume_ = 20;
         }
@@ -57,6 +70,10 @@ public:
                 });
             });
         }
+        restart_button_.OnClick([]() {
+            auto& app = Application::GetInstance();
+            app.Schedule([]() { Application::GetInstance().Reboot(); });
+        });
         InitializeTools();
     }
 
