@@ -8,17 +8,17 @@ from pathlib import Path
 
 from prepare_flower_chimes import validate_ogg
 
-GROUPS = ("clock", "greeting", "startup", "phrase_morning", "phrase_afternoon",
+GROUPS = ("clock", "greeting", "startup", "provisioning", "phrase_morning", "phrase_afternoon",
           "phrase_evening", "phrase_anytime", "session_start", "session_end")
 REQUIRED_FILES = {f"clock_{i:02d}.ogg": "clock" for i in range(1, 13)} | {
     "greeting_morning.ogg": "greeting", "greeting_night.ogg": "greeting",
-    "startup_ready.ogg": "startup"}
+    "startup_ready.ogg": "startup", "wifi_config.ogg": "provisioning"}
 
 
 def valid_recording_name(name, group):
     if not isinstance(name, str) or group not in GROUPS:
         return False
-    if group in ("clock", "greeting", "startup"):
+    if group in ("clock", "greeting", "startup", "provisioning"):
         return REQUIRED_FILES.get(name) == group
     match = re.fullmatch(rf"{group}_([0-9]{{2,}})\.ogg", name)
     return match is not None and int(match[1]) > 0
@@ -58,7 +58,7 @@ def load_manifest(path, validate_audio=True):
             if head < 0 or struct.unpack_from("<I", data, head + 12)[0] != 16000:
                 raise ValueError(f"Opus input sample rate must be 16000 Hz: {name}")
     if not set(REQUIRED_FILES).issubset(seen):
-        raise ValueError("all clock, greeting and startup slots are required")
+        raise ValueError("all clock, greeting, startup and Wi-Fi configuration slots are required")
     # Match RandomPhraseIndex/PhraseCount's existing runtime bounds.
     enabled = [item for item in records if item["enabled"]]
     if sum(item["category"].startswith("phrase_") for item in enabled) > 64:

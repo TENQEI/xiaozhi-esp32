@@ -1,4 +1,4 @@
-"""Exercise the real time settings and HTTP handlers with NVS/network doubles."""
+"""Exercise real persisted time settings and device MCP tools with host doubles."""
 
 import os
 import shlex
@@ -12,8 +12,8 @@ ROOT = Path(__file__).resolve().parents[2]
 BOARD = ROOT / "main/boards/flower-s3"
 
 
-class FlowerWebTest(unittest.TestCase):
-    def test_http_validation_persistence_live_settings_and_failures(self):
+class FlowerMcpSettingsTest(unittest.TestCase):
+    def test_mcp_times_switch_persistence_live_settings_and_failures(self):
         compiler = shlex.split(os.environ.get("CXX", "c++"))
         with tempfile.TemporaryDirectory() as directory:
             build = Path(directory)
@@ -102,107 +102,7 @@ class FlowerWebTest(unittest.TestCase):
                     inline unsigned phrase_random = 0;
                     inline unsigned esp_random() { return phrase_random; }
                 ''',
-                "esp_netif.h": r'''
-                    #pragma once
-                    #include "esp_err.h"
-                    #include <cstdint>
-                    struct esp_ip4_addr_t { uint32_t addr; };
-                    struct esp_netif_ip_info_t { esp_ip4_addr_t ip; };
-                    inline uint32_t station_ip = 12;
-                    inline void* esp_netif_get_handle_from_ifkey(const char*) { return &station_ip; }
-                    inline int esp_netif_get_ip_info(void*, esp_netif_ip_info_t* info) {
-                        info->ip.addr = station_ip; return ESP_OK;
-                    }
-                    #define IPSTR "%d.%d.%d.%d"
-                    #define IP2STR(ip) 192,168,50,static_cast<int>((ip)->addr)
-                ''',
-                "esp_http_server.h": r'''
-                    #pragma once
-                    #include "esp_err.h"
-                    #include <algorithm>
-                    #include <cassert>
-                    #include <cstring>
-                    #include <map>
-                    #include <string>
-                    #include <vector>
-                    enum httpd_method_t { HTTP_GET, HTTP_POST };
-                    struct httpd_req_t {
-                        void* user_ctx = nullptr;
-                        httpd_method_t method = HTTP_GET;
-                        const char* uri = "/";
-                        size_t content_len = 0, offset = 0;
-                        std::map<std::string,std::string> headers, response_headers;
-                        std::string body, response, status = "200 OK", content_type;
-                        int chunk = 7;
-                    };
-                    using httpd_handle_t = void*;
-                    struct httpd_config_t {
-                        unsigned server_port = 80, ctrl_port = 32768, stack_size = 4096;
-                        unsigned max_open_sockets = 7, max_uri_handlers = 8;
-                        bool lru_purge_enable = false;
-                        unsigned recv_wait_timeout = 5, send_wait_timeout = 5;
-                    };
-                    #define HTTPD_DEFAULT_CONFIG() httpd_config_t{}
-                    constexpr int HTTPD_RESP_USE_STRLEN = -1;
-                    struct httpd_uri_t {
-                        const char* uri;
-                        httpd_method_t method;
-                        esp_err_t (*handler)(httpd_req_t*);
-                        void* user_ctx;
-                    };
-                    inline std::vector<httpd_uri_t> routes;
-                    inline bool fail_start = false, fail_registration = false;
-                    inline int server_starts = 0;
-                    inline int httpd_start(httpd_handle_t* handle, const httpd_config_t* config) {
-                        assert(config->server_port == 8080 && config->ctrl_port != 32768);
-                        if (fail_start) return ESP_FAIL;
-                        ++server_starts; *handle = &server_starts; return ESP_OK;
-                    }
-                    inline int httpd_stop(httpd_handle_t) { routes.clear(); return ESP_OK; }
-                    inline int httpd_register_uri_handler(httpd_handle_t, const httpd_uri_t* uri) {
-                        if (fail_registration) return ESP_FAIL;
-                        routes.push_back(*uri); return ESP_OK;
-                    }
-                    inline int httpd_req_get_hdr_value_str(httpd_req_t* req, const char* key,
-                                                           char* value, size_t capacity) {
-                        auto it = req->headers.find(key);
-                        if (it == req->headers.end() || it->second.size() >= capacity) return ESP_FAIL;
-                        std::strcpy(value, it->second.c_str()); return ESP_OK;
-                    }
-                    inline int httpd_resp_set_hdr(httpd_req_t* req, const char* key, const char* value) {
-                        req->response_headers[key] = value; return ESP_OK;
-                    }
-                    inline int httpd_resp_set_status(httpd_req_t* req, const char* status) {
-                        req->status = status; return ESP_OK;
-                    }
-                    inline int httpd_resp_set_type(httpd_req_t* req, const char* type) {
-                        req->content_type = type; return ESP_OK;
-                    }
-                    inline int httpd_resp_send(httpd_req_t* req, const char* data, int size) {
-                        req->response.assign(data, size < 0 ? std::strlen(data) : size); return ESP_OK;
-                    }
-                    inline int httpd_req_recv(httpd_req_t* req, char* data, size_t size) {
-                        if (req->chunk <= 0) return req->chunk;
-                        size = std::min({size, req->body.size() - req->offset, size_t(req->chunk)});
-                        std::memcpy(data, req->body.data() + req->offset, size);
-                        req->offset += size; return static_cast<int>(size);
-                    }
-                    inline httpd_req_t Send(httpd_method_t method, const char* uri, std::string body = "",
-                                            std::string token = "", const char* host = "192.168.50.12:8080",
-                                            const char* type = "application/json", int chunk = 7,
-                                            int length = -1) {
-                        httpd_req_t req;
-                        req.method = method; req.uri = uri; req.body = body;
-                        req.content_len = length < 0 ? body.size() : length; req.chunk = chunk;
-                        req.headers = {{"Host",host},{"X-Flower-Token",token},{"Content-Type",type}};
-                        for (auto& route : routes) {
-                            if (route.method == method && std::strcmp(route.uri, uri) == 0) {
-                                req.user_ctx = route.user_ctx; route.handler(&req); return req;
-                            }
-                        }
-                        assert(false); return req;
-                    }
-                ''',
+
             }
             headers["esp_system.h"] = '#pragma once\n#include <cstdlib>\n[[noreturn]] inline void esp_system_abort(const char*){std::abort();}\n'
             (build / "mbedtls").mkdir()
@@ -246,13 +146,11 @@ class FlowerWebTest(unittest.TestCase):
             source = build / "driver.cc"
             source.write_text(r'''
                 #include "greeting_time_settings.h"
-                #include "time_config_web.h"
                 #include "chime_schedule.h"
                 #include "announcement_mcp_tools.h"
                 #include "mcp_server.h"
                 #include "hourly_chime.h"
                 #include "nvs.h"
-                #include "esp_netif.h"
                 #include "esp_random.h"
                 #include "esp_timer.h"
                 #include "application.h"
@@ -271,6 +169,7 @@ class FlowerWebTest(unittest.TestCase):
                 bool FlowerAudioManager::PlayGreeting(bool){++greetings;return true;}
                 void FlowerAudioManager::PlayPhrase(){++phrases;}
                 int main() {
+                    constexpr std::time_t day = 1762041600;
                     GreetingTimeSettings times;
                     assert(times.Get().morning == 480 && times.Get().night == 1200);
                     times.SetDefaults({540, 1260});
@@ -312,80 +211,9 @@ class FlowerWebTest(unittest.TestCase):
                     assert(GreetingTimeSettings().Get().morning == 480);
                     persisted_blob = backup;
 
-                    TimeConfigWeb web(times);
-                    fail_start = true; web.SetConnected(true); assert(routes.empty());
-                    fail_start = false; fail_registration = true;
-                    web.SetConnected(true); assert(routes.empty());
-                    fail_registration = false; web.SetConnected(true);
-                    assert(routes.size() == 5);
-                    const int started = server_starts;
-                    web.SetConnected(true); assert(server_starts == started);
-                    auto page = Send(HTTP_GET, "/");
-                    assert(page.status == "200 OK" && page.content_type == "text/html; charset=utf-8");
-                    assert(page.response.find("@@TOKEN@@") == std::string::npos);
-                    auto at = page.response.find("const token='"); assert(at != std::string::npos);
-                    std::string token = page.response.substr(at + 13, 32);
-                    assert(token.size() == 32);
-                    for (size_t i = 0; i < token.size(); i += 2) assert(token.substr(i, 2) == "2a");
-                    auto get = Send(HTTP_GET, "/api/times");
-                    assert(get.response == R"({"work_morning":510,"work_night":1215,"rest_morning":510,"rest_night":1215})");
-                    assert(get.response_headers["Cache-Control"] == "no-store");
-                    std::string valid = R"({"work_morning":0,"work_night":1439,"rest_morning":540,"rest_night":1320})";
-                    auto saved = Send(HTTP_POST, "/api/times", valid, token);
-                    assert(saved.status == "200 OK");
-                    assert(times.GetSchedule().restday.morning == 540);
-                    assert(GreetingTimeSettings().Get().night == 1439);
-                    assert(GreetingTimeSettings().GetSchedule().restday.night == 1320);
-                    // Live snapshot reaches the real scheduling policy without rebooting.
-                    ChimeConfig config{0, true, 0, 0, true, true};
-                    auto live = times.Get(); config.quiet_start = live.night / 60;
-                    config.quiet_start_minute = live.night % 60;
-                    ChimeSchedule schedule;
-                    constexpr std::time_t day = 1762041600;
-                    schedule.Poll(day + 1439 * 60 - 1, config, true);
-                    assert(schedule.Poll(day + 1439 * 60, config, true) == ChimeSchedule::kGoodNight);
-                    const int before = commits;
-                    for (std::string bad : std::vector<std::string>{
-                        "", "null", "[]", "{}", R"({"morning":480})",
-                        R"({"morning":480,"night":1440})", R"({"morning":-1,"night":0})",
-                        R"({"morning":true,"night":1})", R"({"morning":"08:00","night":1})",
-                        R"({"morning":1.5,"night":0})", R"({"morning":1e99,"night":0})",
-                        R"({"morning":{},"night":0})", std::string(63, '[') + std::string(63, ']'),
-                        R"({"morning":1,"night":0,"extra":1})",
-                        R"({"morning":1,"morning":2})", valid + " trailing"}) {
-                        assert(Send(HTTP_POST, "/api/times", bad, token).status == "400 Bad Request");
-                    }
-                    for (std::string bad : std::vector<std::string>{
-                        R"({"work_morning":true,"work_night":1,"rest_morning":2,"rest_night":3})",
-                        R"({"work_morning":0,"work_night":1,"rest_morning":2,"rest_night":1440})",
-                        R"({"work_morning":0,"work_night":1,"rest_morning":-1,"rest_night":3})",
-                        R"({"work_morning":0,"work_night":1,"rest_morning":2.5,"rest_night":3})",
-                        R"({"work_morning":0,"work_night":1,"rest_morning":2,"rest_morning":3})"}) {
-                        assert(Send(HTTP_POST, "/api/times", bad, token).status == "400 Bad Request");
-                    }
-                    assert(Send(HTTP_POST, "/api/times", valid + '\0' + "x", token).status == "400 Bad Request");
-                    assert(Send(HTTP_POST, "/api/times", std::string(193, 'x'), token).status == "400 Bad Request");
-                    assert(Send(HTTP_POST, "/api/times", valid, "bad").status == "403 Forbidden");
-                    assert(Send(HTTP_POST, "/api/times", valid, token, "evil.test:8080").status == "403 Forbidden");
-                    assert(Send(HTTP_POST, "/api/times", valid, token, "192.168.50.12:8080", "text/plain").status == "403 Forbidden");
-                    assert(Send(HTTP_POST, "/api/times", valid, token, "192.168.50.12:8080", "application/json", -1).status == "408 Request Timeout");
-                    assert(Send(HTTP_POST, "/api/times", valid, token, "192.168.50.12:8080", "application/json", 7, 100).status == "408 Request Timeout");
-                    assert(commits == before);
-                    assert(times.Get().morning == 0 && times.Get().night == 1439);
-                    fail_commit = true;
-                    assert(Send(HTTP_POST, "/api/times", valid, token).status == "500 Internal Server Error");
-                    fail_commit = false;
-                    assert(times.Get().morning == 0 && times.Get().night == 1439);
-                    web.SetConnected(false);
-                    assert(Send(HTTP_GET, "/").status == "403 Forbidden");
-                    web.SetConnected(true); station_ip = 13;
-                    assert(Send(HTTP_GET, "/").status == "403 Forbidden");
-                    assert(Send(HTTP_GET, "/", "", "", "192.168.50.13:8080").status == "200 OK");
-
-                    // MCP and HTTP share the same persisted master switch.
                     InitializeAnnouncementTools(times);
                     auto& tools=McpServer::GetInstance().tools;
-                    assert(tools.size()==2 && !tools[0]->user_only() && !tools[1]->user_only());
+                    assert(tools.size()==4 && !tools[0]->user_only() && !tools[1]->user_only() && !tools[2]->user_only() && !tools[3]->user_only());
                     assert(tools[0]->name()=="self.flower.get_announcements");
                     assert(tools[1]->name()=="self.flower.set_announcements_enabled");
                     auto schema=tools[1]->to_json();
@@ -403,7 +231,6 @@ class FlowerWebTest(unittest.TestCase):
                     assert(times.AnnouncementsEnabled());
                     assert(set(false));assert(!times.AnnouncementsEnabled());
                     assert(!GreetingTimeSettings().AnnouncementsEnabled());
-                    assert(Send(HTTP_GET,"/api/announcements","","","192.168.50.13:8080").response==R"({"enabled":false})");
                     int writes=commits;assert(set(false));assert(commits==writes);
                     for (int error=0;error<3;++error){
                         fail_open=error==0;fail_set=error==1;fail_commit=error==2;
@@ -411,16 +238,59 @@ class FlowerWebTest(unittest.TestCase):
                         fail_open=fail_set=fail_commit=false;
                         assert(!times.AnnouncementsEnabled() && !GreetingTimeSettings().AnnouncementsEnabled());
                     }
-                    assert(Send(HTTP_POST,"/api/announcements",R"({"enabled":true})",token,"192.168.50.13:8080").status=="200 OK");
+                    assert(set(true));
                     auto status=tools[0]->Call(PropertyList());assert(status);
                     assert(status->find("true")!=std::string::npos && GreetingTimeSettings().AnnouncementsEnabled());
-                    for(const auto* bad : {"{}","null",R"({"enabled":0})",R"({"enabled":"false"})",R"({"enabled":true,"extra":1})",R"({"enabled":true,"enabled":false})"}){
-                        assert(Send(HTTP_POST,"/api/announcements",bad,token,"192.168.50.13:8080").status=="400 Bad Request");
+                    assert(tools[2]->name()=="self.flower.get_greeting_times");
+                    assert(tools[3]->name()=="self.flower.set_greeting_times");
+                    auto get_times=[&]{return tools[2]->Call(PropertyList());};
+                    auto save_times=[&](std::string morning,std::string night,std::string scope="all"){
+                        auto args=tools[3]->properties();
+                        for(auto& property:args){
+                            const auto value=property.name()=="morning"?morning:property.name()=="night"?night:scope;
+                            assert(property.set_value<std::string>(value));
+                        }
+                        return tools[3]->Call(args);
+                    };
+                    auto time_schema=tools[3]->to_json();
+                    assert(time_schema.find("maxLength")!=std::string::npos);
+                    CJsonUniquePtr times_schema(cJSON_Parse(time_schema.c_str()));
+                    auto* time_input=cJSON_GetObjectItem(times_schema.get(),"inputSchema");
+                    auto* time_properties=cJSON_GetObjectItem(time_input,"properties");
+                    auto* time_scope=cJSON_GetObjectItem(time_properties,"scope");
+                    assert(std::strcmp(cJSON_GetObjectItem(time_scope,"default")->valuestring,"all")==0);
+                    assert(cJSON_GetArraySize(cJSON_GetObjectItem(time_input,"required"))==2);
+                    assert(tools[3]->properties()["morning"].Validate(std::string("008:00")).size()>0);
+                    assert(get_times()->find("08:30")!=std::string::npos);
+                    assert(save_times("08:15","20:30"));
+                    assert(times.GetSchedule().restday.morning==495);
+                    assert(GreetingTimeSettings().GetSchedule().restday.night==1230);
+                    assert(save_times("09:45","22:15","restday"));
+                    assert(times.GetSchedule().workday.morning==495);
+                    assert(times.GetSchedule().restday.morning==585);
+                    assert(save_times("07:30","21:15","workday"));
+                    assert(times.GetSchedule().workday.morning==450);
+                    assert(times.GetSchedule().restday.night==1335);
+                    assert(get_times()->find("22:15")!=std::string::npos);
+                    auto saved_times=times.GetSchedule();int saved_commits=commits;
+                    for(const char* bad:{"","8:00","24:00","23:60","00:-1","aa:bb","12.30"}){
+                        assert(!save_times(bad,"20:00"));assert(!save_times("08:00",bad));
                     }
-                    assert(Send(HTTP_POST,"/api/announcements",R"({"enabled":false})","bad","192.168.50.13:8080").status=="403 Forbidden");
-                    fail_commit=true;
-                    assert(Send(HTTP_POST,"/api/announcements",R"({"enabled":false})",token,"192.168.50.13:8080").status=="500 Internal Server Error");
-                    fail_commit=false;assert(times.AnnouncementsEnabled());
+                    assert(!save_times("08:00","20:00","daily"));
+                    assert(commits==saved_commits);
+                    assert(times.GetSchedule().workday.morning==saved_times.workday.morning);
+                    for(int error=0;error<3;++error){
+                        fail_open=error==0;fail_set=error==1;fail_commit=error==2;
+                        assert(!save_times("00:00","23:59"));
+                        fail_open=fail_set=fail_commit=false;
+                        assert(times.GetSchedule().restday.morning==saved_times.restday.morning);
+                        assert(GreetingTimeSettings().GetSchedule().workday.morning==saved_times.workday.morning);
+                    }
+                    assert(save_times("00:00","23:59"));
+                    assert(times.GetSchedule().workday.morning==0 && times.GetSchedule().restday.night==1439);
+                    assert(save_times("12:00","12:00","workday"));
+                    assert(times.GetSchedule().workday.morning==times.GetSchedule().workday.night);
+                    // Time changes preserve the master switch and existing NVS keys.
                     auto kept=times.GetSchedule();assert(set(false));
                     assert(times.GetSchedule().workday.morning==kept.workday.morning);
                     assert(times.SaveSchedule({{480,1200},{480,1200}}));
@@ -513,7 +383,6 @@ class FlowerWebTest(unittest.TestCase):
             subprocess.run(compiler + ["-std=c++23", "-Wall", "-Wextra", "-Werror", "-pthread",
                                        f"-I{build}", f"-I{BOARD}", f"-I{ROOT / 'main'}", *flags,
                                        str(source), str(BOARD / "greeting_time_settings.cc"),
-                                       str(BOARD / "time_config_web.cc"),
                                        str(BOARD / "announcement_mcp_tools.cc"),
                                        str(BOARD / "hourly_chime.cc"), *libs,
                                        "-o", str(build / "test")], check=True)

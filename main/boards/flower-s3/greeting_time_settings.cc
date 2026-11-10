@@ -75,7 +75,7 @@ bool GreetingTimeSettings::AnnouncementsEnabled() const {
 }
 
 bool GreetingTimeSettings::SaveAnnouncementsEnabled(bool enabled) {
-    // Serialize MCP/HTTP writes so the published value follows committed order.
+    // Serialize writes so the published value follows committed order.
     std::lock_guard<std::mutex> writer(announcement_write_mutex_);
     if (AnnouncementsEnabled() == enabled) {
         return true;

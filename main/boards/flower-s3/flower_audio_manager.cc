@@ -13,6 +13,10 @@ std::string_view FlowerAudioManager::StartupSound() const {
     return sounds::STARTUP_READY_ENABLED ? sounds::STARTUP_READY : std::string_view{};
 }
 
+std::string_view FlowerAudioManager::WifiConfigSound() const {
+    return sounds::WIFI_CONFIG_ENABLED ? sounds::WIFI_CONFIG : std::string_view{};
+}
+
 bool FlowerAudioManager::AutomaticEnabled() const { return sounds::AUTOMATIC_ENABLED; }
 
 bool FlowerAudioManager::GreetingEnabled(bool morning) const {

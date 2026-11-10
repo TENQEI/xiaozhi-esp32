@@ -6,7 +6,7 @@
 
 namespace flower {
 
-// HTTP and MCP share these settings. Flash I/O never holds the snapshot mutex.
+// Device MCP owns these settings. Flash I/O never holds the snapshot mutex.
 // The two schedules remain in their original NVS blob; the switch has its own key.
 class GreetingTimeSettings {
 public:

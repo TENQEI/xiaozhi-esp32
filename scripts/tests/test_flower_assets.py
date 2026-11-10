@@ -22,7 +22,7 @@ ASSETS = ROOT / "main/assets/flower"
 class FlowerEmbeddedAssetsTest(unittest.TestCase):
     def test_manifest_all_files_decode_and_placeholders_never_overwrite(self):
         manifest = load_manifest(ASSETS / "audio_manifest.json")
-        self.assertEqual(len(manifest["audio"]), 56)
+        self.assertEqual(len(manifest["audio"]), 57)
         if not shutil.which("ffmpeg"):
             self.skipTest("ffmpeg needed to verify actual decoding")
         for item in manifest["audio"]:
@@ -170,7 +170,7 @@ assert(CLOCK_01.substr(0,4)=="OggS" && GREETING_NIGHT.substr(0,4)=="OggS");
                                        "-o", str(executable)], check=True)
             subprocess.run([str(executable)], check=True)
             report = verify(ASSETS / "audio_manifest.json", executable, executable, "nm")
-            self.assertEqual(report["audio_files"], 56)
+            self.assertEqual(report["audio_files"], 57)
             self.assertGreater(report["free_bytes"], 0)
             with self.assertRaises(ValueError):
                 verify(ASSETS / "audio_manifest.json", executable, executable, "nm", 1)

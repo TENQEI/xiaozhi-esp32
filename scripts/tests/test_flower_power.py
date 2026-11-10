@@ -154,13 +154,13 @@ struct GreetingTimeSettings {GreetingSchedule GetSchedule(){return {};}
 struct FlowerAudioManager {
  bool AutomaticEnabled(){return true;} bool GreetingEnabled(bool){return true;}
  std::string_view StartupSound(){return {};}
+ std::string_view WifiConfigSound(){return {};}
  std::string_view SessionSound(bool){return {};}
  void CommitSessionSound(bool){}
  void PlayPhrase(){Application::GetInstance().state=kDeviceStateNotifying;}
 };
 struct HourlyChime {HourlyChime(GreetingTimeSettings&,FlowerAudioManager&){}
  void Tick(){} void ResetPhraseTimer(){} int64_t NextPhraseUs(){return 0;}};
-struct TimeConfigWeb {TimeConfigWeb(GreetingTimeSettings&){} void SetConnected(bool){}};
 void InitializeAnnouncementTools(GreetingTimeSettings&){}
 }
 struct WifiBoard {Timer* connect_timer_=nullptr;virtual ~WifiBoard()=default;
@@ -168,6 +168,7 @@ struct WifiBoard {Timer* connect_timer_=nullptr;virtual ~WifiBoard()=default;
  virtual PowerSaveLevel LocalPlaybackPowerLevel()const{return PowerSaveLevel::PERFORMANCE;}
  virtual void OnClockTick(){} virtual void OnApplicationEvent(){}
  virtual std::string_view GetStartupSound(){return {};}
+ virtual std::string_view GetWifiConfigSound(){return {};}
  virtual float GetLocalPlaybackGain()const{return 1;}
  virtual std::string_view GetSessionSound(bool){return {};}
  virtual void OnSessionSoundStarted(bool){}
@@ -217,7 +218,7 @@ int main(){
             root = Path(directory)
             (root / "fake.h").write_text(fake)
             for name in ("announcement_mcp_tools.h", "application.h", "button.h", "codecs/no_audio_codec.h",
-                         "config.h", "hourly_chime.h", "led/gpio_led.h", "time_config_web.h", "wifi_board.h",
+                         "config.h", "hourly_chime.h", "led/gpio_led.h", "wifi_board.h",
                          "assets/lang_config.h", "wifi_manager.h", "esp_pm.h", "esp_log.h"):
                 p = root / name
                 p.parent.mkdir(parents=True, exist_ok=True)

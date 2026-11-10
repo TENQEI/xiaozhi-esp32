@@ -12,6 +12,7 @@ public:
     bool PlayGreeting(bool morning);
     void PlayPhrase();
     std::string_view StartupSound() const;
+    std::string_view WifiConfigSound() const;
     std::string_view SessionSound(bool starting);
     void CommitSessionSound(bool starting);
     bool AutomaticEnabled() const;

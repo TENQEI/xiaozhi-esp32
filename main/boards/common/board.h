@@ -84,6 +84,8 @@ public:
     virtual PowerSaveLevel LocalPlaybackPowerLevel() const { return PowerSaveLevel::PERFORMANCE; }
     // Optional ready clip, played once after successful startup. Empty uses the native sound.
     virtual std::string_view GetStartupSound() { return {}; }
+    // Empty uses the standard provisioning prompt.
+    virtual std::string_view GetWifiConfigSound() { return {}; }
     // Linear PCM gain for prerecorded clips played by NotifyPlayer.
     virtual float GetLocalPlaybackGain() const { return 1.0f; }
     // Optional, application-task only. An empty view preserves native behavior.

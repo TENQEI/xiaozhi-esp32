@@ -12,7 +12,6 @@
 #include "led/gpio_led.h"
 #include "microphone_filter.h"
 #include "power_policy.h"
-#include "time_config_web.h"
 #include "wifi_board.h"
 
 namespace {
@@ -25,7 +24,6 @@ private:
     flower::GreetingTimeSettings greeting_times_;
     flower::FlowerAudioManager audio_manager_;
     flower::HourlyChime hourly_chime_{greeting_times_, audio_manager_};
-    flower::TimeConfigWeb time_config_web_{greeting_times_};
 
     flower::PowerPolicy power_;
     bool offline_ = false;
@@ -224,7 +222,6 @@ public:
         if (expired && !offline_ && app.PrepareForNetworkSleep()) {
             offline_ = true;  // Suppress the intentional disconnect notification.
             esp_timer_stop(connect_timer_);
-            time_config_web_.SetConnected(false);
             WifiManager::GetInstance().StopStation();
             ESP_LOGI("FlowerPower", "Five-minute standby expired; WiFi stopped");
         }
@@ -242,6 +239,7 @@ public:
         }
     }
     std::string_view GetStartupSound() override { return audio_manager_.StartupSound(); }
+    std::string_view GetWifiConfigSound() override { return audio_manager_.WifiConfigSound(); }
     float GetLocalPlaybackGain() const override { return 1.5848932f; }  // +4 dB
     std::string_view GetSessionSound(bool starting) override {
         return audio_manager_.SessionSound(starting);
@@ -254,12 +252,6 @@ public:
         WifiBoard::SetNetworkEventCallback(
             [this, callback = std::move(callback)](NetworkEvent event, const std::string& data) {
                 Application::GetInstance().Schedule([this, callback, event, data]() {
-                    if (event == NetworkEvent::Connected) {
-                        time_config_web_.SetConnected(true);
-                    } else if (event == NetworkEvent::Disconnected ||
-                               event == NetworkEvent::WifiConfigModeEnter) {
-                        time_config_web_.SetConnected(false);
-                    }
                     if ((offline_ || reconnecting_ ||
                          Application::GetInstance().IsConnectionOpening()) &&
                         (event == NetworkEvent::Disconnected || event == NetworkEvent::Scanning))

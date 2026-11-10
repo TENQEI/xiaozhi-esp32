@@ -388,7 +388,7 @@ class FlowerScheduleTest(unittest.TestCase):
                 ChimeSchedule no_morning;
                 no_morning.Poll(day + 4 * 3600 - 1, c, true);
                 assert(no_morning.Poll(day + 4 * 3600, c, true) == 4);
-                // Web overrides have minute precision. Hourly clips still play
+                // MCP overrides have minute precision. Hourly clips still play
                 // only on the hour; greeting boundaries use the same quiet window.
                 c = {24, true, 20, 8, true, true, 15, 30};
                 for (int minute : {8 * 60, 8 * 60 + 30, 9 * 60, 20 * 60,
