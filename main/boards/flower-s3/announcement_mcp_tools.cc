@@ -17,7 +17,8 @@ ToolResult Status(const GreetingTimeSettings& settings) {
     return ReturnValue(result.release());
 }
 std::string FormatTime(int minutes) {
-    char text[6];
+    // Allow the full int range; saved schedules already restrict times to one day.
+    char text[16];
     std::snprintf(text, sizeof(text), "%02d:%02d", minutes / 60, minutes % 60);
     return text;
 }
