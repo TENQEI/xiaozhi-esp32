@@ -801,6 +801,12 @@ elseif(CONFIG_BOARD_TYPE_SEEED_STUDIO_SENSECAP_WATCHER)
     set(BUILTIN_TEXT_FONT font_noto_sans_basic_30_4)
     set(BUILTIN_ICON_FONT font_material_symbols_20_4)
     set(DEFAULT_EMOJI_COLLECTION noto-color-emoji_128)
+elseif(CONFIG_BOARD_TYPE_FLOWER_S3)
+    set(BOARD_DIR "flower-s3")
+    if(NOT CMAKE_BUILD_EARLY_EXPANSION)
+        include("${CMAKE_CURRENT_SOURCE_DIR}/boards/flower-s3/flower_assets.cmake")
+        list(APPEND INCLUDE_DIRS "${FLOWER_GENERATED_DIR}")
+    endif()
 elseif(CONFIG_BOARD_TYPE_SEEED_XIAO_ESP32S3_RESPEAKER_XVF3800)
     set(BOARD_DIR "seeed/xiao-esp32s3-respeaker-xvf3800")
     set(BUILTIN_TEXT_FONT font_noto_sans_basic_14_1)
@@ -1167,6 +1173,9 @@ if(CONFIG_IDF_TARGET_ESP32S3)
 endif()
 
 set(MAIN_PRIV_REQUIRES_EXTRA "")
+if(CONFIG_BOARD_TYPE_FLOWER_S3)
+    list(APPEND MAIN_PRIV_REQUIRES_EXTRA esp_hal_usb)
+endif()
 if(CONFIG_XIAOZHI_NETWORK_ETHERNET AND CONFIG_XIAOZHI_ETH_PHY_IP101)
     list(APPEND MAIN_PRIV_REQUIRES_EXTRA espressif__ip101)
 endif()
@@ -1193,7 +1202,7 @@ if(CONFIG_BOARD_TYPE_ESP32_P4_FUNCTION_EV_BOARD)
     )
 endif()
 idf_component_register(SRCS ${SOURCES}
-                    EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS}
+                    EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS} ${FLOWER_SOUNDS}
                     INCLUDE_DIRS ${INCLUDE_DIRS}
                     WHOLE_ARCHIVE
                     PRIV_REQUIRES
@@ -1221,6 +1230,10 @@ idf_component_register(SRCS ${SOURCES}
                         xiaozhi-fonts
                         ${MAIN_PRIV_REQUIRES_EXTRA}
                     )
+
+if(TARGET flower_audio_generated)
+    add_dependencies(${COMPONENT_LIB} flower_audio_generated)
+endif()
 
 # Keep project-owned C++ on GNU C++23. ESP-IDF 6 may default to a newer
 # dialect; pin the baseline so main/ does not depend on it.

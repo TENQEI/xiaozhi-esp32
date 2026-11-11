@@ -25,6 +25,9 @@ public:
     explicit NotifyPlayer(AudioService& audio_service);
     ~NotifyPlayer();
 
+    static constexpr size_t kMaxLocalAudioBytes = 128 * 1024;
+    bool StartLocal(std::string ogg, uint32_t playback_id, FinishedCallback finished_callback);
+
     bool Start(std::string audio_url, std::vector<NotifySubtitle> subtitles, uint32_t playback_id,
                SubtitleCallback subtitle_callback, FinishedCallback finished_callback);
     void Stop();
@@ -37,6 +40,7 @@ private:
     AudioService& audio_service_;
     mutable std::mutex mutex_;
     std::string audio_url_;
+    std::string local_audio_;
     std::vector<NotifySubtitle> subtitles_;
     std::string displayed_text_;
     SubtitleCallback subtitle_callback_;
@@ -56,6 +60,9 @@ private:
 
     static void WorkerEntry(void* arg);
     void WorkerTask();
+    bool StartPlayback(std::string audio_url, std::string local_audio,
+                       std::vector<NotifySubtitle> subtitles, uint32_t playback_id,
+                       SubtitleCallback subtitle_callback, FinishedCallback finished_callback);
     bool IsCancelled(uint32_t playback_id) const;
     FinishedCallback CompleteLocked(uint32_t& playback_id);
 };

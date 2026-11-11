@@ -26,7 +26,7 @@ MqttProtocol::MqttProtocol() {
                     ESP_LOGI(TAG, "Reconnecting to MQTT server");
                     auto alive = protocol->alive_;  // Capture alive flag
                     app.Schedule([protocol, alive]() {
-                        if (*alive) {
+                        if (*alive && !protocol->network_suspended_) {
                             protocol->StartMqttClient(false);
                         }
                     });
@@ -71,7 +71,14 @@ MqttProtocol::~MqttProtocol() {
 
 bool MqttProtocol::Start() { return StartMqttClient(false); }
 
+void MqttProtocol::SuspendNetwork() {
+    network_suspended_ = true;
+    esp_timer_stop(reconnect_timer_);
+    mqtt_.reset();
+}
+
 bool MqttProtocol::StartMqttClient(bool report_error) {
+    network_suspended_ = false;
     if (mqtt_ != nullptr) {
         ESP_LOGW(TAG, "Mqtt client already started");
         mqtt_.reset();
@@ -98,6 +105,8 @@ bool MqttProtocol::StartMqttClient(bool report_error) {
     mqtt_->SetKeepAlive(keepalive_interval);
 
     mqtt_->OnDisconnected([this]() {
+        if (network_suspended_)
+            return;
         if (on_disconnected_ != nullptr) {
             on_disconnected_();
         }
@@ -145,7 +154,7 @@ bool MqttProtocol::StartMqttClient(bool report_error) {
             on_incoming_json_(root);
         }
         cJSON_Delete(root);
-        last_incoming_time_ = std::chrono::steady_clock::now();
+        MarkIncoming();
     });
 
     std::string broker_address;
@@ -362,7 +371,7 @@ bool MqttProtocol::OpenAudioChannel() {
             }
             remote_sequence_ = sequence;
         }
-        last_incoming_time_ = std::chrono::steady_clock::now();
+        MarkIncoming();
         if (on_incoming_audio_ != nullptr) {
             on_incoming_audio_(std::move(packet));
         }
@@ -499,6 +508,8 @@ void MqttProtocol::ParseServerHello(const cJSON* root) {
         local_sequence_ = 0;
         remote_sequence_ = 0;
     }
+    // Publish freshness before the waiting handshake task can inspect the channel.
+    MarkIncoming();
     xEventGroupSetBits(event_group_handle_, MQTT_PROTOCOL_SERVER_HELLO_EVENT);
 }
 

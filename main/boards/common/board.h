@@ -2,12 +2,13 @@
 #define BOARD_H
 
 #include <http.h>
-#include <web_socket.h>
 #include <mqtt.h>
-#include <udp.h>
-#include <string>
-#include <functional>
 #include <network_interface.h>
+#include <udp.h>
+#include <web_socket.h>
+#include <functional>
+#include <string>
+#include <string_view>
 
 #include "led/led.h"
 #include "backlight.h"
@@ -75,7 +76,25 @@ public:
     virtual Camera* GetCamera();
     virtual NetworkInterface* GetNetwork() = 0;
     virtual void StartNetwork() = 0;
+    virtual bool UsesWakeWord() const { return true; }
     virtual void SetNetworkEventCallback(NetworkEventCallback callback) { (void)callback; }
+    // Application-task clock hook. Implementations must not block.
+    virtual void OnClockTick() {}
+    virtual void OnApplicationEvent() {}
+    virtual void TraceWakeEvent(const char*) {}
+    virtual PowerSaveLevel LocalPlaybackPowerLevel() const { return PowerSaveLevel::PERFORMANCE; }
+    // Optional ready clip, played once after successful startup. Empty uses the native sound.
+    virtual std::string_view GetStartupSound() { return {}; }
+    // Empty uses the standard provisioning prompt.
+    virtual std::string_view GetWifiConfigSound() { return {}; }
+    // Linear PCM gain for prerecorded clips played by NotifyPlayer.
+    virtual float GetLocalPlaybackGain() const { return 1.0f; }
+    // Optional, application-task only. An empty view preserves native behavior.
+    virtual std::string_view GetSessionSound(bool starting) {
+        (void)starting;
+        return {};
+    }
+    virtual void OnSessionSoundStarted(bool starting) { (void)starting; }
     virtual const char* GetNetworkStateIcon() = 0;
     virtual bool GetBatteryLevel(int &level, bool& charging, bool& discharging);
     virtual std::string GetSystemInfoJson();

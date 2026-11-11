@@ -183,7 +183,9 @@ void WifiBoard::StartWifiConfigMode() {
         hint += Lang::Strings::ACCESS_VIA_BROWSER;
         hint += wifi_manager.GetApWebUrl();
 
-        Application::GetInstance().Alert(Lang::Strings::WIFI_CONFIG_MODE, hint.c_str(), "gear", Lang::Sounds::OGG_WIFICONFIG);
+        const auto sound = Board::GetInstance().GetWifiConfigSound();
+        Application::GetInstance().Alert(Lang::Strings::WIFI_CONFIG_MODE, hint.c_str(), "gear",
+                                         sound.empty() ? Lang::Sounds::OGG_WIFICONFIG : sound);
     });
 #elif CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING
     auto &blufi = Blufi::GetInstance();
