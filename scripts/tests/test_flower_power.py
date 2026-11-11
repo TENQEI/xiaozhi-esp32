@@ -97,6 +97,8 @@ constexpr int AUDIO_I2S_SPK_GPIO_BCLK=7,AUDIO_I2S_SPK_GPIO_LRCK=8,AUDIO_I2S_SPK_
 constexpr int AUDIO_I2S_MIC_GPIO_SCK=5,AUDIO_I2S_MIC_GPIO_WS=4,AUDIO_I2S_MIC_GPIO_DIN=6;
 constexpr int BUILTIN_LED_GPIO=21,BUILTIN_LED_OUTPUT_INVERT=1;
 #define CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ 240
+#define CONFIG_PM_LIGHT_SLEEP_CALLBACKS 1
+#define CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG 1
 #define ESP_LOGI(...) ((void)0)
 #define ESP_ERROR_CHECK(x) assert((x)==0)
 inline int64_t monotonic=0;
@@ -104,12 +106,36 @@ int64_t esp_timer_get_time(){return monotonic;}
 struct Timer {std::function<void()> callback; int64_t delay=0;};
 using esp_timer_handle_t=Timer*;
 struct esp_timer_create_args_t {void(*callback)(void*)=nullptr;void* arg=nullptr;const char* name=nullptr;};
-int esp_timer_create(esp_timer_create_args_t* t,Timer** out){*out=new Timer{[=]{t->callback(t->arg);},0};return 0;}
+inline Timer* usb_timer=nullptr;inline Timer* trace_timer=nullptr;
+int esp_timer_create(esp_timer_create_args_t* t,Timer** out){
+ auto callback=t->callback;auto arg=t->arg;*out=new Timer{[=]{callback(arg);},0};
+ if(std::string_view(t->name)=="flower_usb")usb_timer=*out;
+ if(std::string_view(t->name)=="flower_trace")trace_timer=*out;
+ return 0;
+}
 int esp_timer_stop(Timer* t){if(t)t->delay=0;return 0;}
-int esp_timer_start_once(Timer* t,int64_t delay){t->delay=delay;return 0;}
+int esp_timer_start_once(Timer* t,int64_t delay){assert(!t->delay);t->delay=delay;return 0;}
+void fire(Timer* t){assert(t->delay);t->delay=0;t->callback();}
 struct esp_pm_config_t {int max_freq_mhz=0,min_freq_mhz=0;bool light_sleep_enable=false;};
 inline bool sleeping=false;
 int esp_pm_configure(esp_pm_config_t* c){sleeping=c->light_sleep_enable;return 0;}
+using esp_err_t=int;
+constexpr esp_err_t ESP_OK=0;
+struct esp_pm_sleep_cbs_register_config_t {
+ esp_err_t(*exit_cb)(int64_t,void*)=nullptr;void* exit_cb_user_arg=nullptr;
+};
+inline esp_pm_sleep_cbs_register_config_t pm_callbacks;
+int esp_pm_light_sleep_register_cbs(esp_pm_sleep_cbs_register_config_t* c){pm_callbacks=*c;return 0;}
+using esp_pm_lock_handle_t=int*;
+constexpr int ESP_PM_NO_LIGHT_SLEEP=0;
+inline int no_sleep_count=0;
+int esp_pm_lock_create(int,int,const char*,int** out){*out=&no_sleep_count;return 0;}
+int esp_pm_lock_acquire(int* lock){++*lock;return 0;}
+int esp_pm_lock_release(int* lock){--*lock;return 0;}
+struct usb_serial_jtag_pull_override_vals_t {};
+inline bool usb_disconnected=false;
+void usb_serial_jtag_ll_phy_enable_pull_override(usb_serial_jtag_pull_override_vals_t*){usb_disconnected=true;}
+void usb_serial_jtag_ll_phy_disable_pull_override(){usb_disconnected=false;}
 enum class PowerSaveLevel {LOW_POWER,PERFORMANCE};
 enum class NetworkEvent {Connected,Disconnected,WifiConfigModeEnter,Scanning};
 using NetworkEventCallback=std::function<void(NetworkEvent,const std::string&)>;
@@ -166,6 +192,7 @@ void InitializeAnnouncementTools(GreetingTimeSettings&){}
 struct WifiBoard {Timer* connect_timer_=nullptr;virtual ~WifiBoard()=default;
  virtual bool UsesWakeWord()const{return true;}
  virtual PowerSaveLevel LocalPlaybackPowerLevel()const{return PowerSaveLevel::PERFORMANCE;}
+ virtual void TraceWakeEvent(const char*){}
  virtual void OnClockTick(){} virtual void OnApplicationEvent(){}
  virtual std::string_view GetStartupSound(){return {};}
  virtual std::string_view GetWifiConfigSound(){return {};}
@@ -188,16 +215,25 @@ int main(){
  monotonic=300000000;b->OnApplicationEvent();assert(sleeping && !w.connected && w.stops==1);
  Button::double_click[1]();a.Drain();b->OnApplicationEvent();
  assert(!sleeping && a.state==kDeviceStateNotifying && a.captures==0 && w.starts==0);
+ assert(!usb_disconnected && usb_timer->delay==0); // Policy armed but no actual sleep yet.
  a.state=kDeviceStateIdle;b->OnApplicationEvent();assert(sleeping);
+ assert(pm_callbacks.exit_cb(1000000,pm_callbacks.exit_cb_user_arg)==ESP_OK);
  Button::click[1]();a.Drain();b->OnApplicationEvent();
  assert(!sleeping && a.buffered && w.starts==1 && a.captures==1);
+ assert(usb_disconnected && usb_timer->delay==100000 && no_sleep_count==1);
+ fire(usb_timer);a.Drain();
+ assert(!usb_disconnected && no_sleep_count==0 && trace_timer->delay==800000);
  w.connected=true;b->OnApplicationEvent();assert(a.state==kDeviceStateListening);
  monotonic+=999000000;b->OnApplicationEvent();assert(!sleeping && w.stops==1);
  a.state=kDeviceStateIdle;b->OnApplicationEvent();
  monotonic+=299000000;b->OnApplicationEvent();assert(w.connected);
  a.state=kDeviceStateNotifying;monotonic+=2000000;b->OnApplicationEvent();assert(w.connected);
  a.state=kDeviceStateIdle;b->OnApplicationEvent();assert(sleeping && w.stops==2);
- Button::click[1]();a.Drain();b->OnApplicationEvent();assert(a.buffered);
+ // A second wake is allowed even if the previous trace is still pending.
+ assert(pm_callbacks.exit_cb(1000000,pm_callbacks.exit_cb_user_arg)==ESP_OK);
+ Button::click[1]();a.Drain();b->OnApplicationEvent();assert(a.buffered && usb_disconnected);
+ fire(usb_timer);a.Drain();assert(!usb_disconnected && trace_timer->delay==800000);
+ fire(trace_timer);a.Drain();
  monotonic+=8000000;b->OnApplicationEvent();assert(!a.buffered && sleeping);
  Button::click[1]();a.Drain();b->OnApplicationEvent();assert(a.buffered);
  Button::click[1]();a.Drain();b->OnApplicationEvent();assert(!a.buffered && sleeping);
@@ -219,11 +255,11 @@ int main(){
             (root / "fake.h").write_text(fake)
             for name in ("announcement_mcp_tools.h", "application.h", "button.h", "codecs/no_audio_codec.h",
                          "config.h", "hourly_chime.h", "led/gpio_led.h", "wifi_board.h",
-                         "assets/lang_config.h", "wifi_manager.h", "esp_pm.h", "esp_log.h"):
+                         "assets/lang_config.h", "wifi_manager.h", "esp_pm.h", "esp_log.h", "sdkconfig.h", "hal/usb_serial_jtag_ll.h"):
                 p = root / name
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_text('#include "fake.h"\n')
-            (root / "test.cc").write_text((BOARD / "flower_s3.cc").read_text() + test)
+            (root / "test.cc").write_text('#include "fake.h"\n' + (BOARD / "flower_s3.cc").read_text() + test)
             compiler = shlex.split(os.environ.get("CXX", "c++"))
             subprocess.run(compiler + ["-std=c++20", "-Wall", "-Wextra", "-Werror", f"-I{root}",
                                        f"-I{BOARD}", str(root / "test.cc"), "-o", str(root / "test")], check=True)

@@ -1,7 +1,13 @@
 #include <esp_log.h>
 #include <esp_pm.h>
+#include <sdkconfig.h>
 #include <wifi_manager.h>
 #include <algorithm>
+#include <array>
+#include <atomic>
+#if CONFIG_PM_LIGHT_SLEEP_CALLBACKS && CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+#include <hal/usb_serial_jtag_ll.h>
+#endif
 #include "announcement_mcp_tools.h"
 #include "application.h"
 #include "assets/lang_config.h"
@@ -35,6 +41,80 @@ private:
     int64_t wake_deadline_ = 0;
     esp_timer_handle_t wake_timer_ = nullptr;
 
+    struct WakeEvent {
+        int64_t time_us = 0;
+        const char* stage = nullptr;
+    };
+    std::array<WakeEvent, 24> wake_events_{};
+    size_t wake_events_written_ = 0;
+
+#if CONFIG_PM_LIGHT_SLEEP_CALLBACKS && CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+    std::atomic<bool> slept_{false};
+    esp_timer_handle_t usb_resume_timer_ = nullptr;
+    esp_timer_handle_t usb_trace_timer_ = nullptr;
+    esp_pm_lock_handle_t usb_resume_lock_ = nullptr;
+    bool usb_detached_ = false;
+
+    void RecoverUsbAfterSleep() {
+        if (usb_detached_ || !slept_.exchange(false))
+            return;
+        // Keep the clocks running only during the detach/attach pulse.
+        ESP_ERROR_CHECK(esp_pm_lock_acquire(usb_resume_lock_));
+        usb_serial_jtag_pull_override_vals_t disconnected{};
+        usb_serial_jtag_ll_phy_enable_pull_override(&disconnected);
+        usb_detached_ = true;
+        TraceWakeEvent("USB detach");
+        ESP_ERROR_CHECK(esp_timer_start_once(usb_resume_timer_, 100000));
+    }
+
+    void InitUsbRecovery() {
+        esp_pm_sleep_cbs_register_config_t sleep_callback = {};
+        sleep_callback.exit_cb = [](int64_t slept_us, void* arg) -> esp_err_t {
+            if (slept_us > 0)
+                static_cast<FlowerS3Board*>(arg)->slept_.store(true);
+            return ESP_OK;
+        };
+        sleep_callback.exit_cb_user_arg = this;
+        ESP_ERROR_CHECK(esp_pm_light_sleep_register_cbs(&sleep_callback));
+        ESP_ERROR_CHECK(
+            esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "flower_usb", &usb_resume_lock_));
+        esp_timer_create_args_t timer = {};
+        timer.callback = [](void* arg) {
+            auto* self = static_cast<FlowerS3Board*>(arg);
+            Application::GetInstance().Schedule([self]() {
+                usb_serial_jtag_ll_phy_disable_pull_override();
+                self->usb_detached_ = false;
+                self->TraceWakeEvent("USB reattach");
+                ESP_ERROR_CHECK(esp_pm_lock_release(self->usb_resume_lock_));
+                // Give the host time to enumerate and reopen the console.
+                esp_timer_stop(self->usb_trace_timer_);
+                ESP_ERROR_CHECK(esp_timer_start_once(self->usb_trace_timer_, 800000));
+            });
+        };
+        timer.arg = this;
+        timer.name = "flower_usb";
+        ESP_ERROR_CHECK(esp_timer_create(&timer, &usb_resume_timer_));
+        timer.callback = [](void* arg) {
+            auto* self = static_cast<FlowerS3Board*>(arg);
+            Application::GetInstance().Schedule([self]() { self->DumpWakeTrace(); });
+        };
+        timer.name = "flower_trace";
+        ESP_ERROR_CHECK(esp_timer_create(&timer, &usb_trace_timer_));
+    }
+#endif
+
+    void DumpWakeTrace() const {
+        const auto start = wake_events_written_ > wake_events_.size()
+                               ? wake_events_written_ - wake_events_.size()
+                               : 0;
+        for (auto i = start; i < wake_events_written_; ++i) {
+            const auto& entry = wake_events_[i % wake_events_.size()];
+            ESP_LOGI("FlowerWake", "%lld ms: %s", static_cast<long long>(entry.time_us / 1000),
+                     entry.stage);
+            (void)entry;
+        }
+    }
+
     void SetLightSleep(bool enabled) {
         if (light_sleep_ == enabled)
             return;
@@ -44,6 +124,11 @@ private:
         config.light_sleep_enable = enabled;
         ESP_ERROR_CHECK(esp_pm_configure(&config));
         light_sleep_ = enabled;
+        TraceWakeEvent(enabled ? "offline sleep armed" : "interactive wake");
+#if CONFIG_PM_LIGHT_SLEEP_CALLBACKS && CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+        if (!enabled)
+            RecoverUsbAfterSleep();
+#endif
         ESP_LOGI("FlowerPower", "%s", enabled ? "Offline auto Light-sleep enabled" : "CPU awake");
     }
 
@@ -96,6 +181,7 @@ private:
             app.ToggleChatState();  // Preserve the existing online session-start cue.
             return;
         }
+        TraceWakeEvent("single click / offline conversation");
         if (!app.BeginBufferedConversation()) {
             button_pending_ = true;
             return;
@@ -106,6 +192,7 @@ private:
         // StartStation is asynchronous. Keep recording while association/DHCP run.
         if (offline_ || !WifiManager::GetInstance().IsConnected()) {
             offline_ = false;
+            TraceWakeEvent("Wi-Fi start");
             WifiManager::GetInstance().StartStation();
         }
     }
@@ -168,6 +255,9 @@ public:
             auto& app = Application::GetInstance();
             app.Schedule([]() { Application::GetInstance().Reboot(); });
         });
+#if CONFIG_PM_LIGHT_SLEEP_CALLBACKS && CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+        InitUsbRecovery();
+#endif
         esp_timer_create_args_t timer = {};
         timer.callback = [](void* arg) {
             auto* self = static_cast<FlowerS3Board*>(arg);
@@ -180,6 +270,10 @@ public:
         timer.name = "flower_wake";
         ESP_ERROR_CHECK(esp_timer_create(&timer, &wake_timer_));
         InitializeTools();
+    }
+
+    void TraceWakeEvent(const char* stage) override {
+        wake_events_[wake_events_written_++ % wake_events_.size()] = {esp_timer_get_time(), stage};
     }
 
     bool UsesWakeWord() const override { return false; }
@@ -199,14 +293,16 @@ public:
         if (reconnecting_) {
             if (!app.HasBufferedConversation()) {
                 reconnecting_ = false;
+            } else if (WifiManager::GetInstance().IsConnected()) {
+                reconnecting_ = false;
+                TraceWakeEvent("Wi-Fi ready");
+                app.ConnectBufferedConversation();
             } else if (now >= connection_deadline_) {
                 reconnecting_ = false;
+                TraceWakeEvent("Wi-Fi timeout");
                 app.CancelBufferedConversation();
                 power_.Expire();
                 app.PlaySound(Lang::Sounds::OGG_EXCLAMATION);
-            } else if (WifiManager::GetInstance().IsConnected()) {
-                reconnecting_ = false;
-                app.ConnectBufferedConversation();
             }
         }
         const auto state = app.GetDeviceState();

@@ -155,7 +155,7 @@ bool WebsocketProtocol::OpenAudioChannel() {
             }
             cJSON_Delete(root);
         }
-        last_incoming_time_ = std::chrono::steady_clock::now();
+        MarkIncoming();
     });
 
     // Callbacks run on the transport's receive task, which on 4G modems is the
@@ -262,5 +262,7 @@ void WebsocketProtocol::ParseServerHello(const cJSON* root) {
         }
     }
 
+    // Publish freshness before the waiting handshake task can inspect the channel.
+    MarkIncoming();
     xEventGroupSetBits(event_group_handle_, WEBSOCKET_PROTOCOL_SERVER_HELLO_EVENT);
 }

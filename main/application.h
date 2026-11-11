@@ -174,6 +174,9 @@ private:
     std::atomic<bool> buffered_open_in_progress_{false};
     void FinishBufferedConnection(std::shared_ptr<Protocol> protocol, bool connected);
     bool buffered_conversation_ = false;
+    bool buffered_connection_ready_ = false;
+    bool buffered_connection_failed_ = false;
+    void CompleteBufferedStart();
     int clock_ticks_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;
 

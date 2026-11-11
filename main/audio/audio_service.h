@@ -139,7 +139,8 @@ public:
     void EnableWakeWordDetection(bool enable);
     void ReleaseWakeWordResources();
     void EnableVoiceProcessing(bool enable);
-    bool BeginMicrophoneBuffer();
+    bool BeginMicrophoneBuffer(bool cue_playing = false);
+    void ReleaseMicrophoneAfterCue();
     bool MicrophoneBufferOverflowed();
     bool PrepareForSleep();
     void EndMicrophoneBuffer(bool send);
@@ -217,6 +218,8 @@ private:
 #endif
     std::atomic<bool> service_stopped_{true};
     std::atomic<bool> audio_input_need_warmup_{false};
+    std::atomic<bool> discard_cue_input_{false};
+    std::chrono::steady_clock::time_point cue_tail_until_{};
 
     esp_timer_handle_t audio_power_timer_ = nullptr;
     std::chrono::steady_clock::time_point last_input_time_;

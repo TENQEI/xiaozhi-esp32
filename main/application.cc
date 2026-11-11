@@ -588,6 +588,10 @@ void Application::InitializeProtocol() {
     protocol_->OnConnected([this]() { DismissAlert(); });
 
     protocol_->OnNetworkError([this](const std::string& message) {
+        // Buffered handshake failures are completed on the application task,
+        // after the local cue, so the generic alert cannot interrupt the cue.
+        if (buffered_open_in_progress_.load())
+            return;
         last_error_message_ = message;
         xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
     });
@@ -832,9 +836,17 @@ bool Application::BeginBufferedConversation() {
         return false;
     }
     DismissAlert();
-    buffered_conversation_ = audio_service_.BeginMicrophoneBuffer();
+    buffered_connection_ready_ = false;
+    buffered_connection_failed_ = false;
+    buffered_conversation_ = audio_service_.BeginMicrophoneBuffer(true);
     if (buffered_conversation_) {
         SetDeviceState(kDeviceStateConnecting);
+        Board::GetInstance().TraceWakeEvent("start cue / microphone warmup");
+        BeginConversation(GetDefaultListeningMode(), [this]() {
+            audio_service_.ReleaseMicrophoneAfterCue();
+            Board::GetInstance().TraceWakeEvent("cue complete");
+            CompleteBufferedStart();
+        });
     }
     return buffered_conversation_;
 }
@@ -868,7 +880,8 @@ void Application::ConnectBufferedConversation() {
             "flower_connect", 8192, context, 2, nullptr) != pdPASS) {
         delete context;
         buffered_open_in_progress_ = false;
-        CancelBufferedConversation();
+        buffered_connection_failed_ = true;
+        CompleteBufferedStart();
     }
 }
 
@@ -880,18 +893,28 @@ void Application::FinishBufferedConnection(std::shared_ptr<Protocol> protocol, b
         buffered_open_in_progress_ = false;
         return;
     }
-    if (!connected || !protocol->IsAudioChannelOpened() ||
+    buffered_connection_ready_ = connected && protocol->IsAudioChannelOpened();
+    buffered_connection_failed_ = !buffered_connection_ready_;
+    buffered_open_in_progress_ = false;
+    Board::GetInstance().TraceWakeEvent(buffered_connection_ready_ ? "server hello ready"
+                                                                   : "server handshake failed");
+    CompleteBufferedStart();
+}
+
+void Application::CompleteBufferedStart() {
+    if (!buffered_conversation_ || session_sound_pending_ ||
+        (!buffered_connection_ready_ && !buffered_connection_failed_))
+        return;
+    if (buffered_connection_failed_ || !protocol_->IsAudioChannelOpened() ||
         audio_service_.MicrophoneBufferOverflowed()) {
+        buffered_connection_ready_ = false;
         CancelBufferedConversation();
-        protocol->CloseAudioChannel();
-        buffered_open_in_progress_ = false;
+        protocol_->CloseAudioChannel();
         SetDeviceState(kDeviceStateIdle);
         if (last_error_message_.empty())
             PlaySound(Lang::Sounds::OGG_EXCLAMATION);
         return;
     }
-    buffered_open_in_progress_ = false;
-    session_.Begin();
     play_popup_on_listening_ = true;  // Send listen-start before releasing buffered packets.
     suppress_next_popup_ = true;      // The user is already speaking.
     SetListeningMode(GetDefaultListeningMode());
@@ -902,6 +925,13 @@ void Application::CancelBufferedConversation() {
         return;
     }
     buffered_conversation_ = false;
+    const bool close = buffered_connection_ready_ && !buffered_open_in_progress_;
+    buffered_connection_ready_ = false;
+    buffered_connection_failed_ = false;
+    session_.Cancel();
+    CancelSessionSound();
+    if (close && protocol_ && protocol_->IsAudioChannelOpened())
+        protocol_->CloseAudioChannel();
     audio_service_.EnableVoiceProcessing(false);
     audio_service_.EndMicrophoneBuffer(false);
     if (GetDeviceState() == kDeviceStateConnecting)
@@ -1168,7 +1198,8 @@ void Application::BeginConversation(ListeningMode mode, std::function<void()> re
         session_.Cancel();
         return;
     }
-    audio_service_.EnableVoiceProcessing(false);
+    if (!buffered_conversation_)
+        audio_service_.EnableVoiceProcessing(false);
     audio_service_.EnableWakeWordDetection(false);
     audio_service_.ResetDecoder();
     session_sound_pending_ = true;
@@ -1184,7 +1215,8 @@ void Application::BeginConversation(ListeningMode mode, std::function<void()> re
             session_sound_pending_ = false;
             suppress_next_popup_ = success;
             auto continuation = std::move(session_sound_continuation_);
-            if (protocol_ && protocol_->IsAudioChannelOpened() && continuation)
+            if (continuation &&
+                (buffered_conversation_ || (protocol_ && protocol_->IsAudioChannelOpened())))
                 continuation();
             else {
                 session_.Cancel();
@@ -1223,6 +1255,12 @@ void Application::HandleAudioChannelClosed() {
     // A stale close from a cancelled handshake must not end a new conversation.
     if (buffered_open_in_progress_)
         return;
+    if (buffered_conversation_ && session_sound_pending_) {
+        buffered_connection_ready_ = false;
+        buffered_connection_failed_ = true;
+        Board::GetInstance().TraceWakeEvent("channel closed during cue");
+        return;  // Let the prompt finish before reporting a failed connection.
+    }
     CancelBufferedConversation();
     const bool normal_end = session_.Closed();
     CancelSessionSound();
@@ -1399,15 +1437,23 @@ void Application::StartListeningAudio() {
     // Recheck before sending: capture can fill the buffer in that interval.
     if (buffered_conversation_ && audio_service_.MicrophoneBufferOverflowed()) {
         CancelConversation();
-        protocol_->CloseAudioChannel();
         SetDeviceState(kDeviceStateIdle);
         PlaySound(Lang::Sounds::OGG_EXCLAMATION);
         return;
     }
-    // Send the start listening command
-    protocol_->SendStartListening(listening_mode_);
+    const bool listening_sent = protocol_->SendStartListening(listening_mode_);
+    if (buffered_conversation_ && !listening_sent) {
+        Board::GetInstance().TraceWakeEvent("listen start send failed");
+        CancelConversation();
+        SetDeviceState(kDeviceStateIdle);
+        if (last_error_message_.empty())
+            PlaySound(Lang::Sounds::OGG_EXCLAMATION);
+        return;
+    }
     if (buffered_conversation_) {
         buffered_conversation_ = false;
+        buffered_connection_ready_ = false;
+        Board::GetInstance().TraceWakeEvent("listen start / release audio");
         audio_service_.EndMicrophoneBuffer(true);
     } else {
         audio_service_.EnableVoiceProcessing(true);

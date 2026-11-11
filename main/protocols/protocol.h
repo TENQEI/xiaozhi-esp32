@@ -2,6 +2,7 @@
 #define PROTOCOL_H
 
 #include <cJSON.h>
+#include <atomic>
 #include <chrono>
 #include <functional>
 #include <string>
@@ -65,7 +66,7 @@ public:
     virtual bool IsAudioChannelOpened() const = 0;
     virtual bool SendAudio(std::unique_ptr<AudioStreamPacket> packet) = 0;
     virtual void SendWakeWordDetected(const std::string& wake_word);
-    virtual void SendStartListening(ListeningMode mode);
+    virtual bool SendStartListening(ListeningMode mode);
     virtual void SendStopListening();
     virtual void SendAbortSpeaking(AbortReason reason);
     virtual void SendMcpMessage(const std::string& message);
@@ -83,7 +84,8 @@ protected:
     int server_frame_duration_ = 60;
     bool error_occurred_ = false;
     std::string session_id_;
-    std::chrono::time_point<std::chrono::steady_clock> last_incoming_time_;
+    void MarkIncoming();
+    std::atomic<uint32_t> last_incoming_seconds_{0};
 
     virtual bool SendText(const std::string& text) = 0;
     virtual void SetError(const std::string& message);

@@ -81,6 +81,7 @@ public:
     // Application-task clock hook. Implementations must not block.
     virtual void OnClockTick() {}
     virtual void OnApplicationEvent() {}
+    virtual void TraceWakeEvent(const char*) {}
     virtual PowerSaveLevel LocalPlaybackPowerLevel() const { return PowerSaveLevel::PERFORMANCE; }
     // Optional ready clip, played once after successful startup. Empty uses the native sound.
     virtual std::string_view GetStartupSound() { return {}; }

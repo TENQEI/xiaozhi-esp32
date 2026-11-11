@@ -154,7 +154,7 @@ bool MqttProtocol::StartMqttClient(bool report_error) {
             on_incoming_json_(root);
         }
         cJSON_Delete(root);
-        last_incoming_time_ = std::chrono::steady_clock::now();
+        MarkIncoming();
     });
 
     std::string broker_address;
@@ -371,7 +371,7 @@ bool MqttProtocol::OpenAudioChannel() {
             }
             remote_sequence_ = sequence;
         }
-        last_incoming_time_ = std::chrono::steady_clock::now();
+        MarkIncoming();
         if (on_incoming_audio_ != nullptr) {
             on_incoming_audio_(std::move(packet));
         }
@@ -508,6 +508,8 @@ void MqttProtocol::ParseServerHello(const cJSON* root) {
         local_sequence_ = 0;
         remote_sequence_ = 0;
     }
+    // Publish freshness before the waiting handshake task can inspect the channel.
+    MarkIncoming();
     xEventGroupSetBits(event_group_handle_, MQTT_PROTOCOL_SERVER_HELLO_EVENT);
 }
 
