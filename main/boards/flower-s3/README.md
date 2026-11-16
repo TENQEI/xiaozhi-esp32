@@ -60,7 +60,7 @@ python scripts/build.py flower-s3 --name flower-s3 --language zh-CN --zip
 该命令自动选择 ESP32-S3、`BOARD_TYPE_FLOWER_S3`、8 MB Flash 和
 `partitions/v2/8m.csv`，继承 ESP32-S3 的 8 线 PSRAM/80 MHz 配置。
 输入采样率 16 kHz，输出采样率 24 kHz；复用 `NoAudioCodecSimplex` 的两个 I²S 控制器。
-当前 Flower 固件版本为 `2.5.3.2`，包含语音计时器和离线唤醒时先播开场音再启动 Wi-Fi 的修正。
+当前 Flower 固件版本为 `2.5.2.4`，包含语音计时器和离线唤醒时先播开场音再启动 Wi-Fi 的修正。
 使用 BOOT 或 D0 按键开启对话，闲置时停用语音唤醒和麦克风。
 无屏界面由公共 `NoDisplay` 实现，状态通过板载灯、语音提示和 USB 串口日志查看。
 
