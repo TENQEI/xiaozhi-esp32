@@ -67,6 +67,7 @@ bool NotifyPlayer::StartPlayback(std::string audio_url, std::string local_audio,
         subtitle_callback_ = std::move(subtitle_callback);
         finished_callback_ = std::move(finished_callback);
         playback_id_ = playback_id;
+        audio_generation_ = audio_service_.GetPlaybackGeneration();
         last_playback_position_ms_ = 0;
         underrun_count_ = 0;
         next_subtitle_index_ = 0;
@@ -193,8 +194,10 @@ void NotifyPlayer::WorkerTask() {
     std::string audio_url;
     std::string local_audio;
     uint32_t playback_id = 0;
+    uint32_t audio_generation = 0;
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        audio_generation = audio_generation_;
         audio_url = audio_url_;
         local_audio = std::move(local_audio_);
         playback_id = playback_id_;
@@ -207,8 +210,8 @@ void NotifyPlayer::WorkerTask() {
     const bool is_local = !local_audio.empty();
     const float playback_gain = is_local ? Board::GetInstance().GetLocalPlaybackGain() : 1.0f;
     demuxer->OnPacket(
-        [this, playback_id, is_local, playback_gain, &media_position_ms, &packet_error](
-            const uint8_t* data, int sample_rate, int frame_duration_ms, size_t size) {
+        [this, playback_id, audio_generation, is_local, playback_gain, &media_position_ms,
+         &packet_error](const uint8_t* data, int sample_rate, int frame_duration_ms, size_t size) {
             if (packet_error || IsCancelled(playback_id) ||
                 // Permit codec pre-skip and final-frame padding around a 60 s clip.
                 (is_local && media_position_ms + frame_duration_ms > 61000)) {
@@ -230,7 +233,8 @@ void NotifyPlayer::WorkerTask() {
                 }
                 playback_drained_ = false;
             }
-            if (!audio_service_.PushPacketToDecodeQueue(std::move(packet), true)) {
+            if (!audio_service_.PushPacketToDecodeQueue(std::move(packet), true,
+                                                        audio_generation)) {
                 packet_error = true;
                 return;
             }

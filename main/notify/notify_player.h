@@ -47,6 +47,7 @@ private:
     FinishedCallback finished_callback_;
     TaskHandle_t task_handle_ = nullptr;
     uint32_t playback_id_ = 0;
+    uint32_t audio_generation_ = 0;
     uint32_t last_playback_position_ms_ = 0;
     uint32_t underrun_count_ = 0;
     size_t next_subtitle_index_ = 0;

@@ -11,7 +11,7 @@ class HourlyChime {
 public:
     HourlyChime(GreetingTimeSettings& times, FlowerAudioManager& audio)
         : times_(times), audio_(audio) {}
-    void Tick();
+    void Tick(bool suppressed = false);
     int64_t NextPhraseUs() const { return next_phrase_us_; }
     void ResetPhraseTimer() { next_phrase_us_ = 0; }
 

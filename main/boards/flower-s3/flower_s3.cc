@@ -14,6 +14,8 @@
 #include "button.h"
 #include "codecs/no_audio_codec.h"
 #include "config.h"
+#include "countdown_mcp_tools.h"
+#include "countdown_timer.h"
 #include "hourly_chime.h"
 #include "led/gpio_led.h"
 #include "microphone_filter.h"
@@ -30,6 +32,11 @@ private:
     flower::GreetingTimeSettings greeting_times_;
     flower::FlowerAudioManager audio_manager_;
     flower::HourlyChime hourly_chime_{greeting_times_, audio_manager_};
+    flower::CountdownTimer countdown_;
+    esp_timer_handle_t countdown_wake_ = nullptr;
+    int64_t countdown_wake_at_ = 0;
+    bool countdown_second_clip_ = false;
+    bool suppress_d0_gesture_ = false;
 
     flower::PowerPolicy power_;
     bool offline_ = false;
@@ -156,6 +163,53 @@ private:
         }
     }
 
+    bool UpdateCountdown() {
+        const auto now = esp_timer_get_time();
+        const auto state = countdown_.Poll(now);
+        const auto deadline = countdown_.Deadline();
+        if (deadline != countdown_wake_at_) {
+            esp_timer_stop(countdown_wake_);
+            if (deadline != 0)
+                ESP_ERROR_CHECK(esp_timer_start_once(countdown_wake_, deadline - now));
+            countdown_wake_at_ = deadline;
+        }
+        if (state != flower::CountdownTimer::State::kRinging)
+            return false;
+
+        auto& app = Application::GetInstance();
+        if (!app.IsPriorityPlayback()) {
+            SetLightSleep(false);
+            hourly_chime_.Tick(true);
+            reconnecting_ = false;
+            button_pending_ = false;
+            config_pending_ = false;
+            countdown_second_clip_ =
+                app.BeginPriorityPlayback(audio_manager_.CountdownSound(false));
+            return true;
+        }
+        if (app.PlayPriorityLocalAudio(audio_manager_.CountdownSound(countdown_second_clip_)))
+            countdown_second_clip_ = !countdown_second_clip_;
+        return true;
+    }
+
+    void StopCountdownAlarm() {
+        if (!countdown_.Silence())
+            return;
+        // Consume the current schedule boundary before ordinary audio is admitted.
+        hourly_chime_.Tick(true);
+        Application::GetInstance().EndPriorityPlayback();
+        suppress_d0_gesture_ = true;
+    }
+
+    bool ConsumeAlarmGesture(bool d0) {
+        const bool ringing = UpdateCountdown();
+        if (d0 && suppress_d0_gesture_) {
+            suppress_d0_gesture_ = false;
+            return true;
+        }
+        return ringing;
+    }
+
     void HandleButton() {
         button_pending_ = false;
         auto& app = Application::GetInstance();
@@ -177,7 +231,7 @@ private:
             return;
         }
         WifiBoard::SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
-        if (!offline_ && WifiManager::GetInstance().IsConnected()) {
+        if (!offline_ && WifiManager::GetInstance().IsConnected() && !countdown_.Deadline()) {
             app.ToggleChatState();  // Preserve the existing online session-start cue.
             return;
         }
@@ -197,7 +251,10 @@ private:
         }
     }
 
-    void InitializeTools() { flower::InitializeAnnouncementTools(greeting_times_); }
+    void InitializeTools() {
+        flower::InitializeCountdownTools(countdown_);
+        flower::InitializeAnnouncementTools(greeting_times_);
+    }
 
     class FlowerAudioCodec : public NoAudioCodecSimplex {
     protected:
@@ -224,12 +281,25 @@ private:
 
 public:
     FlowerS3Board() {
+        main_button_.OnPressDown([this]() {
+            Application::GetInstance().Schedule([this]() {
+                if (UpdateCountdown())
+                    StopCountdownAlarm();
+            });
+        });
         Button* buttons[] = {&boot_button_, &main_button_};
         for (auto* button : buttons) {
-            button->OnClick(
-                [this]() { Application::GetInstance().Schedule([this]() { HandleButton(); }); });
-            button->OnLongPress([this]() {
-                Application::GetInstance().Schedule([this]() {
+            const bool d0 = button == &main_button_;
+            button->OnClick([this, d0]() {
+                Application::GetInstance().Schedule([this, d0]() {
+                    if (!ConsumeAlarmGesture(d0))
+                        HandleButton();
+                });
+            });
+            button->OnLongPress([this, d0]() {
+                Application::GetInstance().Schedule([this, d0]() {
+                    if (ConsumeAlarmGesture(d0))
+                        return;
                     SetLightSleep(false);
                     offline_ = false;
                     reconnecting_ = false;
@@ -243,8 +313,10 @@ public:
                     EnterWifiConfigMode();
                 });
             });
-            button->OnDoubleClick([this]() {
-                Application::GetInstance().Schedule([this]() {
+            button->OnDoubleClick([this, d0]() {
+                Application::GetInstance().Schedule([this, d0]() {
+                    if (ConsumeAlarmGesture(d0))
+                        return;
                     SetLightSleep(false);
                     hourly_chime_.ResetPhraseTimer();
                     audio_manager_.PlayPhrase();
@@ -263,12 +335,18 @@ public:
             auto* self = static_cast<FlowerS3Board*>(arg);
             Application::GetInstance().Schedule([self]() {
                 self->wake_deadline_ = 0;
-                self->hourly_chime_.Tick();
+                self->OnClockTick();
             });
         };
         timer.arg = this;
         timer.name = "flower_wake";
         ESP_ERROR_CHECK(esp_timer_create(&timer, &wake_timer_));
+        timer.callback = [](void* arg) {
+            auto* self = static_cast<FlowerS3Board*>(arg);
+            Application::GetInstance().Schedule([self]() { self->UpdateCountdown(); });
+        };
+        timer.name = "flower_countdown";
+        ESP_ERROR_CHECK(esp_timer_create(&timer, &countdown_wake_));
         InitializeTools();
     }
 
@@ -278,9 +356,17 @@ public:
 
     bool UsesWakeWord() const override { return false; }
     PowerSaveLevel LocalPlaybackPowerLevel() const override { return PowerSaveLevel::LOW_POWER; }
-    void OnClockTick() override { hourly_chime_.Tick(); }
+    void OnClockTick() override { hourly_chime_.Tick(UpdateCountdown()); }
+    void OnConversationReplyText(std::string_view text) override { countdown_.ObservePrompt(text); }
+    void OnConversationReplyFinished() override { countdown_.PromptPlayed(esp_timer_get_time()); }
+    void OnUserSpeechRecognized(std::string_view text) override {
+        countdown_.Recognize(text, esp_timer_get_time());
+    }
+    void OnConversationEnded() override { countdown_.ClearConfirmation(); }
 
     void OnApplicationEvent() override {
+        if (UpdateCountdown())
+            return;
         auto& app = Application::GetInstance();
         const auto now = esp_timer_get_time();
         if (config_pending_ && !app.IsConnectionOpening()) {

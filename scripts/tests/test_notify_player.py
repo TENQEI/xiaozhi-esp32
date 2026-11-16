@@ -56,8 +56,12 @@ class NotifyPlayerTest(unittest.TestCase):
                 public:
                     std::vector<AudioStreamPacket> packets;
                     std::function<bool(const AudioStreamPacket&)> on_push;
-                    bool PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> p, bool) {
+                    uint32_t generation = 0;
+                    uint32_t GetPlaybackGeneration() { return generation; }
+                    bool PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> p, bool,
+                                                 uint32_t expected) {
                         if (on_push && !on_push(*p)) return false;
+                        if (expected != generation) return false;
                         packets.push_back(*p); return true;
                     }
                 };
@@ -137,7 +141,9 @@ class NotifyPlayerTest(unittest.TestCase):
                 player.OnPlaybackDrained(); assert(calls == 1);
 
                 audio.packets.clear();
-                audio.on_push = [&](const AudioStreamPacket&) { player.Stop(); return false; };
+                audio.on_push = [&](const AudioStreamPacket&) {
+                    player.Stop(); ++audio.generation; return true;
+                };
                 assert(player.StartLocal(sound, 9, done)); RunWorker();
                 assert(!player.IsBusy() && calls == 1 && audio.packets.empty());
                 audio.on_push = {};

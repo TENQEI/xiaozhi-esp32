@@ -90,6 +90,7 @@ int main() {
 #include <utility>
 #include <vector>
 #include "greeting_schedule.h"
+#include "countdown_timer.h"
 using gpio_num_t=int;
 constexpr int BOOT_BUTTON_GPIO=0,MAIN_BUTTON_GPIO=1,RESTART_BUTTON_GPIO=2;
 constexpr int AUDIO_INPUT_SAMPLE_RATE=16000,AUDIO_OUTPUT_SAMPLE_RATE=24000;
@@ -106,11 +107,12 @@ int64_t esp_timer_get_time(){return monotonic;}
 struct Timer {std::function<void()> callback; int64_t delay=0;};
 using esp_timer_handle_t=Timer*;
 struct esp_timer_create_args_t {void(*callback)(void*)=nullptr;void* arg=nullptr;const char* name=nullptr;};
-inline Timer* usb_timer=nullptr;inline Timer* trace_timer=nullptr;
+inline Timer* usb_timer=nullptr;inline Timer* trace_timer=nullptr;inline Timer* countdown_timer=nullptr;
 int esp_timer_create(esp_timer_create_args_t* t,Timer** out){
  auto callback=t->callback;auto arg=t->arg;*out=new Timer{[=]{callback(arg);},0};
  if(std::string_view(t->name)=="flower_usb")usb_timer=*out;
  if(std::string_view(t->name)=="flower_trace")trace_timer=*out;
+ if(std::string_view(t->name)=="flower_countdown")countdown_timer=*out;
  return 0;
 }
 int esp_timer_stop(Timer* t){if(t)t->delay=0;return 0;}
@@ -144,9 +146,10 @@ struct GpioLed:Led {GpioLed(int,int){} void TurnOff(){}};
 struct AudioCodec {virtual ~AudioCodec()=default;};
 struct NoAudioCodecSimplex:AudioCodec {int output_volume_=0;
  template<class... T>NoAudioCodecSimplex(T...){} virtual int Read(int16_t*,int n){return n;}};
-struct Button {inline static std::function<void()> click[3],double_click[3],long_press[3];int pin;
+struct Button {inline static std::function<void()> click[3],double_click[3],long_press[3],press_down[3];int pin;
  Button(int p,bool,int,int,bool power):pin(p){assert(power);}
  void OnClick(std::function<void()> f){click[pin]=f;}
+ void OnPressDown(std::function<void()> f){press_down[pin]=f;}
  void OnDoubleClick(std::function<void()> f){double_click[pin]=f;}
  void OnLongPress(std::function<void()> f){long_press[pin]=f;}};
 struct WifiManager {bool connected=true,config=false;int starts=0,stops=0;
@@ -158,6 +161,16 @@ enum DeviceState {kDeviceStateStarting,kDeviceStateIdle,kDeviceStateConnecting,k
 struct AudioService {bool idle=true; bool IsPlaybackIdle(){return idle;}};
 struct Application {DeviceState state=kDeviceStateIdle;bool buffered=false,opening=false;int toggles=0,captures=0;
  AudioService audio;std::vector<std::function<void()>> tasks;
+ bool priority=false,ring_clip_busy=false;std::vector<std::string_view> clips;
+ bool IsPriorityPlayback(){return priority;}
+ bool PlayPriorityLocalAudio(std::string_view clip){
+  if(ring_clip_busy)return false;
+  clips.push_back(clip);ring_clip_busy=true;return true;
+ }
+ bool BeginPriorityPlayback(std::string_view clip){
+  priority=true;state=kDeviceStateIdle;return PlayPriorityLocalAudio(clip);
+ }
+ void EndPriorityPlayback(){priority=false;ring_clip_busy=false;}
  static Application& GetInstance(){static Application a;return a;}
  void Schedule(std::function<void()> f){tasks.push_back(f);}
  void Drain(){auto t=std::move(tasks);tasks.clear();for(auto& f:t)f();}
@@ -182,18 +195,25 @@ struct FlowerAudioManager {
  std::string_view StartupSound(){return {};}
  std::string_view WifiConfigSound(){return {};}
  std::string_view SessionSound(bool){return {};}
+ std::string_view CountdownSound(bool second){return second?"14":"15";}
  void CommitSessionSound(bool){}
  void PlayPhrase(){Application::GetInstance().state=kDeviceStateNotifying;}
 };
 struct HourlyChime {HourlyChime(GreetingTimeSettings&,FlowerAudioManager&){}
- void Tick(){} void ResetPhraseTimer(){} int64_t NextPhraseUs(){return 0;}};
+ void Tick(bool = false){} void ResetPhraseTimer(){} int64_t NextPhraseUs(){return 0;}};
 void InitializeAnnouncementTools(GreetingTimeSettings&){}
+CountdownTimer* countdown;
+void InitializeCountdownTools(CountdownTimer& value){countdown=&value;}
 }
 struct WifiBoard {Timer* connect_timer_=nullptr;virtual ~WifiBoard()=default;
  virtual bool UsesWakeWord()const{return true;}
  virtual PowerSaveLevel LocalPlaybackPowerLevel()const{return PowerSaveLevel::PERFORMANCE;}
  virtual void TraceWakeEvent(const char*){}
  virtual void OnClockTick(){} virtual void OnApplicationEvent(){}
+ virtual void OnConversationReplyText(std::string_view){}
+ virtual void OnConversationReplyFinished(){}
+ virtual void OnUserSpeechRecognized(std::string_view){}
+ virtual void OnConversationEnded(){}
  virtual std::string_view GetStartupSound(){return {};}
  virtual std::string_view GetWifiConfigSound(){return {};}
  virtual float GetLocalPlaybackGain()const{return 1;}
@@ -248,6 +268,20 @@ int main(){
  b->network_callback(NetworkEvent::Disconnected,"");a.Drain();assert(forwarded==0);
  b->network_callback(NetworkEvent::Connected,"");a.Drain();assert(forwarded==1);
  a.opening=false;a.state=kDeviceStateIdle;
+ // A separate one-shot wakes the offline board even with no scheduled playback.
+ b->OnApplicationEvent();assert(sleeping);
+ assert(flower::countdown->Start(30,monotonic));
+ b->OnApplicationEvent();assert(countdown_timer->delay==30000000 && sleeping);
+ monotonic+=30000000;fire(countdown_timer);a.Drain();
+ assert(!sleeping && !w.connected && a.priority && a.clips.back()=="15");
+ a.ring_clip_busy=false;b->OnApplicationEvent();assert(a.clips.back()=="14");
+ a.ring_clip_busy=false;b->OnApplicationEvent();assert(a.clips.back()=="15");
+ const auto captures=a.captures;
+ Button::press_down[1]();a.Drain();assert(!a.priority);
+ Button::double_click[1]();a.Drain();b->OnApplicationEvent();
+ assert(a.captures==captures && sleeping);
+ Button::press_down[1]();Button::click[1]();a.Drain();b->OnApplicationEvent();
+ assert(a.captures==captures+1);
 }
 '''
         with tempfile.TemporaryDirectory() as directory:

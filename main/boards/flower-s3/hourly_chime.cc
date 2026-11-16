@@ -7,7 +7,7 @@
 
 namespace flower {
 
-void HourlyChime::Tick() {
+void HourlyChime::Tick(bool suppressed) {
     auto& app = Application::GetInstance();
     const auto now = std::time(nullptr);
     const auto times = TimesForDate(times_.GetSchedule(), now);
@@ -19,7 +19,7 @@ void HourlyChime::Tick() {
                audio_.GreetingEnabled(false),
                times.night % 60,
                times.morning % 60};
-    const bool idle = app.GetDeviceState() == kDeviceStateIdle;
+    const bool idle = !suppressed && app.GetDeviceState() == kDeviceStateIdle;
     const int index = schedule_.Poll(now, config_, idle);
     if (index >= 0) {
         audio_.PlayClock(index);

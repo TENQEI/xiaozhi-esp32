@@ -101,6 +101,8 @@ public:
     bool PrepareForNetworkSleep();
     void ConnectBufferedConversation();
     void CancelBufferedConversation();
+    bool HasOpenConversation() const;
+    void CloseAfterCurrentReply();
     bool IsConnectionOpening() const { return buffered_open_in_progress_; }
     bool HasBufferedConversation() const { return buffered_conversation_; }
 
@@ -129,6 +131,10 @@ public:
     bool PlayLocalNotification(const std::string& asset_name);
     // Application-task only; the input is copied into the bounded async player.
     bool PlayLocalAudio(std::string_view ogg);
+    bool PlayPriorityLocalAudio(std::string_view ogg);
+    bool BeginPriorityPlayback(std::string_view first_clip);
+    void EndPriorityPlayback();
+    bool IsPriorityPlayback() const { return priority_playback_; }
     AudioService& GetAudioService() { return audio_service_; }
     
     /**
@@ -155,6 +161,12 @@ private:
     std::string startup_wake_word_hint_message_;
     AudioService audio_service_;
     NotifyPlayer notify_player_;
+    NotifyPlayer priority_player_;
+    std::atomic<bool> priority_playback_{false};
+    std::atomic<uint32_t> playback_cutoff_generation_{0};
+    bool priority_clip_playing_ = false;
+    bool reply_playback_pending_ = false;
+    int64_t close_after_reply_deadline_ = 0;
     uint32_t notification_playback_id_ = 0;
     SessionLifecycle session_;
     bool session_sound_pending_ = false;
@@ -197,6 +209,12 @@ private:
     void CancelSessionSound();
     void CancelConversation();
     void HandleAudioChannelClosed();
+    void CloseConversationSilently();
+    void DiscardConversationAudio();
+    void CloseActiveAudioChannel();
+    void HandleTtsStopped();
+    void FinishReplyPlayback();
+    void ClearReplyPlayback();
     void StartListeningAudio();
     void ConfigureWakeWordForListening();
     void ShowStartupWakeWordHint();

@@ -72,6 +72,16 @@ int main() {
             'void Application::CancelSessionSound()',
             'void Application::CancelConversation()',
             'void Application::HandleAudioChannelClosed()',
+            'void Application::ClearReplyPlayback()',
+            'void Application::CloseAfterCurrentReply()',
+            'void Application::HandleTtsStopped()',
+            'void Application::FinishReplyPlayback()',
+            'void Application::CloseConversationSilently()',
+            'void Application::DiscardConversationAudio()',
+            'void Application::CloseActiveAudioChannel()',
+            'bool Application::BeginPriorityPlayback(',
+            'void Application::EndPriorityPlayback()',
+            'bool Application::PlayPriorityLocalAudio(',
         ))
         driver = r'''
 #define ESP_LOGI(...) ((void)0)
@@ -86,6 +96,7 @@ int main() {
 #include <vector>
 #include "main/audio/session_lifecycle.h"
 constexpr int pdPASS=1;
+int64_t esp_timer_get_time(){return 1000000;}
 inline std::vector<std::function<void()>> workers;
 int xTaskCreate(void(*f)(void*),const char*,int,void* arg,int,void*){workers.push_back([=]{f(arg);});return pdPASS;}
 void vTaskDelete(void*){}
@@ -139,6 +150,9 @@ struct Display {void SetChatMessage(const char*,const char*){}};
 struct Board {
  void SetPowerSaveLevel(PowerSaveLevel){}
  void TraceWakeEvent(const char*){}
+ int replies=0;
+ void OnConversationEnded(){}
+ void OnConversationReplyFinished(){++replies;}
  std::string start="OggSstart", end="OggSend"; int started=0, ended=0; Display display;
  static Board& GetInstance(){static Board b; return b;}
  std::string_view GetSessionSound(bool starting){return starting?start:end;}
@@ -165,7 +179,20 @@ struct Application {
  SessionLifecycle session_; bool session_sound_pending_=false, suppress_next_popup_=false;
  std::function<void()> session_sound_continuation_;
  uint32_t notification_playback_id_=0;
- NotifyPlayer notify_player_; Audio audio_service_;
+ NotifyPlayer notify_player_, priority_player_; Audio audio_service_;
+ bool reply_playback_pending_=false, aborted_=false, priority_playback_=false, priority_clip_playing_=false;
+ int64_t close_after_reply_deadline_=0;
+ uint32_t playback_cutoff_generation_=0;
+ void ClearReplyPlayback();
+ void CloseAfterCurrentReply();
+ void HandleTtsStopped();
+ void FinishReplyPlayback();
+ void CloseConversationSilently();
+ void DiscardConversationAudio();
+ void CloseActiveAudioChannel();
+ bool BeginPriorityPlayback(std::string_view);
+ void EndPriorityPlayback();
+ bool PlayPriorityLocalAudio(std::string_view);
  std::shared_ptr<Protocol> protocol_=std::make_shared<Protocol>();
  DeviceState state=kDeviceStateConnecting; std::string last_error_message_;
  std::vector<std::function<void()>> scheduled;
@@ -308,6 +335,23 @@ int main(){
  assert(!no_connection.listening && !no_connection.notify_player_.starts && no_connection.state==kDeviceStateIdle);
  Application button;button.ContinueOpenAudioChannel(kListeningModeAutoStop);
  assert(!button.listening);button.notify_player_.Finish();button.Drain();assert(button.listening==1);
+ // Managed acknowledgement closes only when TTS playback has drained.
+ Application countdown;countdown.state=kDeviceStateSpeaking;countdown.session_.Begin();
+ countdown.CloseAfterCurrentReply();countdown.audio_service_.idle=false;
+ countdown.HandleTtsStopped();assert(countdown.state==kDeviceStateSpeaking && countdown.protocol_->open);
+ countdown.audio_service_.idle=true;countdown.FinishReplyPlayback();
+ assert(countdown.state==kDeviceStateIdle && !countdown.protocol_->open && !countdown.local_plays);
+ countdown.HandleAudioChannelClosed();assert(!countdown.local_plays);
+ // Other replies still resume listening and notify the board after drain.
+ const auto previous_replies=board.replies;
+ Application normal;normal.state=kDeviceStateSpeaking;normal.audio_service_.idle=false;
+ normal.HandleTtsStopped();assert(normal.state==kDeviceStateListening && board.replies==previous_replies);
+ normal.audio_service_.idle=true;normal.FinishReplyPlayback();assert(board.replies==previous_replies+1);
+ // The priority player starts while a cancelled notification worker still exists.
+ Application alarm;alarm.state=kDeviceStateNotifying;alarm.notify_player_.busy=true;
+ assert(alarm.BeginPriorityPlayback("OggS15") && alarm.priority_player_.busy && !alarm.protocol_->open);
+ alarm.priority_player_.Finish();alarm.EndPriorityPlayback();alarm.Drain();
+ assert(!alarm.priority_clip_playing_ && !alarm.priority_playback_);
  board.start.clear();Application native;
  native.BeginConversation(kListeningModeAutoStop,[&]{++ready;});assert(ready==6 && !native.notify_player_.starts);
 }

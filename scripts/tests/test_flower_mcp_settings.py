@@ -130,12 +130,15 @@ class FlowerMcpSettingsTest(unittest.TestCase):
             headers["application.h"] = r'''
                 #pragma once
                 constexpr int kDeviceStateIdle=0;
-                inline bool device_idle = true, playback_idle = true;
+                inline bool device_idle = true, playback_idle = true, conversation_open = true;
+                inline int closes_after_reply = 0;
                 class AudioService {public:
                     bool IsPlaybackIdle(){return playback_idle;}
                 };
                 class Application {public:
                     AudioService audio;
+                    bool HasOpenConversation(){return conversation_open;}
+                    void CloseAfterCurrentReply(){++closes_after_reply;}
                     AudioService& GetAudioService(){return audio;}
                     static Application& GetInstance(){static Application app;return app;}
                     int GetDeviceState(){return device_idle ? kDeviceStateIdle : 1;}
@@ -148,6 +151,8 @@ class FlowerMcpSettingsTest(unittest.TestCase):
                 #include "greeting_time_settings.h"
                 #include "chime_schedule.h"
                 #include "announcement_mcp_tools.h"
+                #include "countdown_timer.h"
+                #include "countdown_mcp_tools.h"
                 #include "mcp_server.h"
                 #include "hourly_chime.h"
                 #include "nvs.h"
@@ -305,6 +310,9 @@ class FlowerMcpSettingsTest(unittest.TestCase):
                     assert(greetings==1 && clocks==0);
                     now=day+1440*60+540*60-1;automatic.Tick();++now;automatic.Tick();assert(clocks==1);
                     now=day+1440*60+1200*60-1;automatic.Tick();++now;automatic.Tick();assert(greetings==2);
+                    now=day+2*86400+480*60-1;automatic.Tick();++now;
+                    automatic.Tick(true);++now;automatic.Tick();
+                    assert(greetings==2 && clocks==1); // Do not replay a greeting suppressed by the timer.
 
                     // One switch gates the three scheduled cues and random chatter.
                     HourlyChime chatter(times, audio);
@@ -378,13 +386,75 @@ class FlowerMcpSettingsTest(unittest.TestCase):
                         assert(times.SaveSchedule(i % 2 ? first : second));
                     }
                     done.store(true); reader.join();
+
+                    CountdownTimer timer;
+                    using State = CountdownTimer::State;
+                    InitializeCountdownTools(timer);
+                    monotonic_us = 0;
+                    auto start_timer = [&](int seconds) {
+                        auto args = tools[4]->properties();
+                        for (auto& argument : args) assert(argument.set_value<int>(seconds));
+                        return tools[4]->Call(args).value();
+                    };
+                    auto status_timer = [&] {return tools[5]->Call(PropertyList()).value();};
+                    auto cancel_timer = [&] {return tools[6]->Call(PropertyList()).value();};
+                    auto confirm_timer = [&](const char* token) {
+                        auto args = tools[7]->properties();
+                        for (auto& argument : args) assert(argument.set_value<std::string>(token));
+                        return tools[7]->Call(args).value();
+                    };
+                    assert(status_timer().find("idle") != std::string::npos);
+                    assert(start_timer(300).find("计时5分钟") != std::string::npos && closes_after_reply == 1);
+                    monotonic_us = 200000001;
+                    assert(status_timer().find("1分钟40秒") != std::string::npos);
+                    assert(start_timer(900).find("15分钟") != std::string::npos);
+                    assert(confirm_timer("1").find("confirmation_invalid") != std::string::npos);
+                    timer.Recognize("确认替换", monotonic_us); // Before the question is played.
+                    timer.PromptPlayed(monotonic_us);
+                    assert(confirm_timer("1").find("confirmation_invalid") != std::string::npos);
+                    timer.ObservePrompt("要结束现在的计时吗？请说确认替换。");
+                    timer.PromptPlayed(monotonic_us);
+                    timer.Recognize("确认替换。", monotonic_us);
+                    assert(confirm_timer("1").find("计时15分钟") != std::string::npos && closes_after_reply == 2);
+                    assert(confirm_timer("1").find("confirmation_invalid") != std::string::npos);
+                    assert(cancel_timer().find("confirmation_required") != std::string::npos);
+                    timer.ObservePrompt("请说确认取消。");
+                    timer.PromptPlayed(monotonic_us);
+                    timer.Recognize("不要确认取消。", monotonic_us);
+                    assert(confirm_timer("2").find("confirmation_invalid") != std::string::npos);
+                    assert(timer.GetState() == State::kRunning);
+                    assert(cancel_timer().find("confirmation_required") != std::string::npos);
+                    timer.ObservePrompt("请说确认取消。");
+                    timer.PromptPlayed(monotonic_us);
+                    timer.Recognize("好！", monotonic_us);
+                    assert(confirm_timer("3").find("计时已取消") != std::string::npos);
+                    assert(timer.GetState() == State::kIdle);
+                    assert(start_timer(1).find("计时1秒") != std::string::npos);
+                    assert(cancel_timer().find("confirmation_required") != std::string::npos);
+                    timer.ObservePrompt("请说确认取消。");
+                    timer.PromptPlayed(monotonic_us);
+                    timer.Recognize("确认", monotonic_us);
+                    monotonic_us += CountdownTimer::kSecondUs;
+                    assert(confirm_timer("4").find("confirmation_invalid") != std::string::npos);
+                    assert(status_timer().find("ringing") != std::string::npos && timer.Silence());
+                    assert(!timer.Start(0, monotonic_us) && !timer.Start(3601, monotonic_us));
+                    assert(start_timer(3600).find("计时一小时") != std::string::npos);
+                    const auto kept_deadline = timer.Deadline();
+                    const auto token = timer.Request(CountdownTimer::Action::kCancel, 0, monotonic_us);
+                    timer.ObservePrompt("请说确认取消。");
+                    timer.PromptPlayed(monotonic_us);
+                    timer.Recognize("确认取消", monotonic_us);
+                    CountdownTimer::Action action;
+                    assert(!timer.Confirm(token, monotonic_us + 30000000, action));
+                    assert(timer.Deadline() == kept_deadline);
+
                 }
             ''')
             subprocess.run(compiler + ["-std=c++23", "-Wall", "-Wextra", "-Werror", "-pthread",
                                        f"-I{build}", f"-I{BOARD}", f"-I{ROOT / 'main'}", *flags,
                                        str(source), str(BOARD / "greeting_time_settings.cc"),
                                        str(BOARD / "announcement_mcp_tools.cc"),
-                                       str(BOARD / "hourly_chime.cc"), *libs,
+                                       str(BOARD / "hourly_chime.cc"), str(BOARD / "countdown_mcp_tools.cc"), *libs,
                                        "-o", str(build / "test")], check=True)
             subprocess.run([str(build / "test")], check=True)
 

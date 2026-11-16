@@ -14,6 +14,7 @@ public:
     std::string_view StartupSound() const;
     std::string_view WifiConfigSound() const;
     std::string_view SessionSound(bool starting);
+    std::string_view CountdownSound(bool second) const;
     void CommitSessionSound(bool starting);
     bool AutomaticEnabled() const;
     bool GreetingEnabled(bool morning) const;

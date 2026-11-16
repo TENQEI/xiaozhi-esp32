@@ -62,6 +62,10 @@ void FlowerAudioManager::PlayPhrase() {
     }
 }
 
+std::string_view FlowerAudioManager::CountdownSound(bool second) const {
+    return second ? sounds::PHRASE_ANYTIME_14 : sounds::PHRASE_ANYTIME_15;
+}
+
 std::string_view FlowerAudioManager::SessionSound(bool starting) {
     const int slot = starting ? 0 : 1;
     const auto* clips = starting ? sounds::SESSION_START.data() : sounds::SESSION_END.data();

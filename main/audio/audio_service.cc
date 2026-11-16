@@ -640,9 +640,17 @@ void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t
     }
 }
 
-bool AudioService::PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait) {
+uint32_t AudioService::GetPlaybackGeneration() {
+    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    return playback_generation_;
+}
+
+bool AudioService::PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait,
+                                           std::optional<uint32_t> expected_generation) {
     std::unique_lock<std::mutex> lock(audio_queue_mutex_);
-    const uint32_t generation = playback_generation_;
+    const uint32_t generation = expected_generation.value_or(playback_generation_);
+    if (generation != playback_generation_)
+        return false;
     if (audio_decode_queue_.size() >= MAX_DECODE_PACKETS_IN_QUEUE) {
         if (wait) {
             audio_queue_cv_.wait(lock, [this, generation]() {
@@ -877,7 +885,8 @@ void AudioService::EnableDeviceAec(bool enable) {
 
 void AudioService::SetCallbacks(AudioServiceCallbacks& callbacks) { callbacks_ = callbacks; }
 
-void AudioService::PlaySound(const std::string_view& ogg) {
+void AudioService::PlaySound(const std::string_view& ogg,
+                             std::optional<uint32_t> expected_generation) {
     if (!codec_->output_enabled()) {
         esp_timer_stop(audio_power_timer_);
         esp_timer_start_periodic(audio_power_timer_, AUDIO_POWER_CHECK_INTERVAL_MS * 1000);
@@ -888,15 +897,16 @@ void AudioService::PlaySound(const std::string_view& ogg) {
     size_t size = ogg.size();
 
     auto demuxer = std::make_unique<OggDemuxer>();
-    demuxer->OnPacket(
-        [this](const uint8_t* data, int sample_rate, int frame_duration_ms, size_t size) {
-            auto packet = std::make_unique<AudioStreamPacket>();
-            packet->sample_rate = sample_rate;
-            packet->frame_duration = frame_duration_ms;
-            packet->payload.resize(size);
-            std::memcpy(packet->payload.data(), data, size);
-            PushPacketToDecodeQueue(std::move(packet), true);
-        });
+    const auto generation = expected_generation.value_or(GetPlaybackGeneration());
+    demuxer->OnPacket([this, generation](const uint8_t* data, int sample_rate,
+                                         int frame_duration_ms, size_t size) {
+        auto packet = std::make_unique<AudioStreamPacket>();
+        packet->sample_rate = sample_rate;
+        packet->frame_duration = frame_duration_ms;
+        packet->payload.resize(size);
+        std::memcpy(packet->payload.data(), data, size);
+        PushPacketToDecodeQueue(std::move(packet), true, generation);
+    });
     demuxer->Reset();
     demuxer->Process(buf, size);
 }

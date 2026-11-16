@@ -27,6 +27,7 @@ bool PlayLocalAudio(std::string_view sound){++calls;last=sound;return accepted &
                     'inline constexpr bool AUTOMATIC_ENABLED=true,GREETING_MORNING_ENABLED=true,GREETING_NIGHT_ENABLED=true;',
                     'inline constexpr std::string_view GREETING_MORNING="morning",GREETING_NIGHT="night";',
                     'inline bool WIFI_CONFIG_ENABLED=true; inline constexpr std::string_view WIFI_CONFIG="wifi-config";',
+                    'inline constexpr std::string_view PHRASE_ANYTIME_14="alarm-14",PHRASE_ANYTIME_15="alarm-15";',
                     'inline bool STARTUP_READY_ENABLED=true; inline constexpr std::string_view STARTUP_READY="startup-ready";']
             for group,count,offset in [('CLOCK',12,0),('PHRASE_ANYTIME',10,100),('PHRASE_MORNING',4,200),('PHRASE_AFTERNOON',4,300),('PHRASE_EVENING',4,400),('SESSION_START',4,500),('SESSION_END',3,600)]:
                 values=','.join('{"%s-%d",%d}'%(group,i,offset+i) for i in range(count))
@@ -51,6 +52,7 @@ int main(){
 flower::FlowerAudioManager manager;
 assert(manager.StartupSound()=="startup-ready");
 assert(manager.WifiConfigSound()=="wifi-config");
+assert(manager.CountdownSound(false)=="alarm-15" && manager.CountdownSound(true)=="alarm-14");
 Flower::Sounds::WIFI_CONFIG_ENABLED=false;assert(manager.WifiConfigSound().empty());
 Flower::Sounds::WIFI_CONFIG_ENABLED=true;
 Flower::Sounds::STARTUP_READY_ENABLED=false;assert(manager.StartupSound().empty());
