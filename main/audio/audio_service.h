@@ -142,6 +142,7 @@ public:
     void EnableVoiceProcessing(bool enable);
     bool BeginMicrophoneBuffer(bool cue_playing = false);
     void ReleaseMicrophoneAfterCue();
+    int64_t MicrophoneCueTailRemainingUs();
     bool MicrophoneBufferOverflowed();
     bool PrepareForSleep();
     void EndMicrophoneBuffer(bool send);

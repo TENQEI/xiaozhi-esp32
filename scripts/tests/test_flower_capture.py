@@ -13,12 +13,14 @@ class FlowerCaptureTest(unittest.TestCase):
             "bool AudioService::BeginMicrophoneBuffer(",
             "bool AudioService::MicrophoneBufferOverflowed()",
             "void AudioService::ReleaseMicrophoneAfterCue()",
+            "int64_t AudioService::MicrophoneCueTailRemainingUs()",
             "void AudioService::EndMicrophoneBuffer(",
             "std::unique_ptr<AudioStreamPacket> AudioService::PopPacketFromSendQueue()"))
         start = source.index("if (task.capture_generation != capture_generation_)")
         end = source.index("\n                        }\n                        if (callbacks_.on_send_queue_available)", start)
         route = source[start:end]
         driver = r'''
+#include <algorithm>
 #include <cassert>
 #include <condition_variable>
 #include <chrono>
@@ -43,7 +45,7 @@ struct AudioService {
  struct {std::function<void()> on_send_queue_available;} callbacks_;
  void EnableVoiceProcessing(bool enabled){voice=enabled && initialize;}
  bool IsAudioProcessorRunning(){return voice;}
- void ReleaseMicrophoneAfterCue();
+ void ReleaseMicrophoneAfterCue();int64_t MicrophoneCueTailRemainingUs();
  bool BeginMicrophoneBuffer(bool cue=false);bool MicrophoneBufferOverflowed();
  void EndMicrophoneBuffer(bool);std::unique_ptr<AudioStreamPacket> PopPacketFromSendQueue();
  void Encode(int id,uint32_t generation){
@@ -58,10 +60,14 @@ int main(){
  AudioService audio;int callbacks=0;audio.callbacks_.on_send_queue_available=[&]{++callbacks;};
  assert(audio.BeginMicrophoneBuffer(true));auto generation=audio.capture_generation_;
  assert(audio.discard_cue_input_);
- audio.last_output_time_=std::chrono::steady_clock::now();
+ assert(audio.MicrophoneCueTailRemainingUs()==0);
+ audio.last_output_time_=std::chrono::steady_clock::now()+std::chrono::seconds(1);
  audio.ReleaseMicrophoneAfterCue();
  assert(!audio.discard_cue_input_);
  assert(audio.cue_tail_until_-audio.last_output_time_==std::chrono::milliseconds(60));
+ assert(audio.MicrophoneCueTailRemainingUs()>0);
+ audio.cue_tail_until_=std::chrono::steady_clock::now()-std::chrono::milliseconds(1);
+ assert(audio.MicrophoneCueTailRemainingUs()==0);
  for(int i=1;i<=5;++i)audio.Encode(i,generation);
  assert(!audio.PopPacketFromSendQueue() && !audio.MicrophoneBufferOverflowed());
  audio.Encode(6,generation);assert(audio.MicrophoneBufferOverflowed());

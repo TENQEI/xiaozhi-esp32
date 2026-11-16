@@ -814,6 +814,12 @@ void AudioService::ReleaseMicrophoneAfterCue() {
     discard_cue_input_ = false;
 }
 
+int64_t AudioService::MicrophoneCueTailRemainingUs() {
+    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    const auto remaining = cue_tail_until_ - std::chrono::steady_clock::now();
+    return std::max<int64_t>(0, std::chrono::ceil<std::chrono::microseconds>(remaining).count());
+}
+
 bool AudioService::BeginMicrophoneBuffer(bool cue_playing) {
     {
         std::lock_guard<std::mutex> lock(audio_queue_mutex_);

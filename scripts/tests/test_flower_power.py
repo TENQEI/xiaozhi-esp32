@@ -108,15 +108,18 @@ struct Timer {std::function<void()> callback; int64_t delay=0;};
 using esp_timer_handle_t=Timer*;
 struct esp_timer_create_args_t {void(*callback)(void*)=nullptr;void* arg=nullptr;const char* name=nullptr;};
 inline Timer* usb_timer=nullptr;inline Timer* trace_timer=nullptr;inline Timer* countdown_timer=nullptr;
+inline Timer* cue_tail_timer=nullptr;
 int esp_timer_create(esp_timer_create_args_t* t,Timer** out){
  auto callback=t->callback;auto arg=t->arg;*out=new Timer{[=]{callback(arg);},0};
  if(std::string_view(t->name)=="flower_usb")usb_timer=*out;
  if(std::string_view(t->name)=="flower_trace")trace_timer=*out;
  if(std::string_view(t->name)=="flower_countdown")countdown_timer=*out;
+ if(std::string_view(t->name)=="flower_cue_tail")cue_tail_timer=*out;
  return 0;
 }
 int esp_timer_stop(Timer* t){if(t)t->delay=0;return 0;}
 int esp_timer_start_once(Timer* t,int64_t delay){assert(!t->delay);t->delay=delay;return 0;}
+bool esp_timer_is_active(Timer* t){return t->delay!=0;}
 void fire(Timer* t){assert(t->delay);t->delay=0;t->callback();}
 struct esp_pm_config_t {int max_freq_mhz=0,min_freq_mhz=0;bool light_sleep_enable=false;};
 inline bool sleeping=false;
@@ -158,8 +161,12 @@ struct WifiManager {bool connected=true,config=false;int starts=0,stops=0;
  void StartStation(){++starts;}
  void StopStation(){++stops;connected=false;}};
 enum DeviceState {kDeviceStateStarting,kDeviceStateIdle,kDeviceStateConnecting,kDeviceStateListening,kDeviceStateSpeaking,kDeviceStateNotifying};
-struct AudioService {bool idle=true; bool IsPlaybackIdle(){return idle;}};
-struct Application {DeviceState state=kDeviceStateIdle;bool buffered=false,opening=false;int toggles=0,captures=0;
+struct AudioService {
+ bool idle=true;int64_t cue_tail_until=0;
+ bool IsPlaybackIdle(){return idle;}
+ int64_t MicrophoneCueTailRemainingUs(){return std::max<int64_t>(0,cue_tail_until-monotonic);}
+};
+struct Application {DeviceState state=kDeviceStateIdle;bool buffered=false,opening=false,cue=false;int toggles=0,captures=0;
  AudioService audio;std::vector<std::function<void()>> tasks;
  bool priority=false,ring_clip_busy=false;std::vector<std::string_view> clips;
  bool IsPriorityPlayback(){return priority;}
@@ -176,10 +183,15 @@ struct Application {DeviceState state=kDeviceStateIdle;bool buffered=false,openi
  void Drain(){auto t=std::move(tasks);tasks.clear();for(auto& f:t)f();}
  DeviceState GetDeviceState(){return state;}
  void ToggleChatState(){++toggles;state=kDeviceStateListening;}
- bool BeginBufferedConversation(){if(!audio.idle)return false;buffered=true;++captures;state=kDeviceStateConnecting;return true;}
+ bool BeginBufferedConversation(){
+  if(!audio.idle)return false;
+  buffered=true;cue=true;audio.cue_tail_until=0;++captures;state=kDeviceStateConnecting;return true;
+ }
+ void CompleteCue(int64_t tail){cue=false;audio.cue_tail_until=monotonic+tail;}
  void ConnectBufferedConversation(){buffered=false;state=kDeviceStateListening;}
- void CancelBufferedConversation(){buffered=false;state=kDeviceStateIdle;}
+ void CancelBufferedConversation(){buffered=false;cue=false;state=kDeviceStateIdle;}
  bool HasBufferedConversation(){return buffered;}
+ bool IsBufferedConversationCuePending(){return buffered&&cue;}
  bool IsConnectionOpening(){return opening;}
  AudioService& GetAudioService(){return audio;}
  bool CanEnterSleepMode(){return state==kDeviceStateIdle && audio.idle;}
@@ -239,10 +251,15 @@ int main(){
  a.state=kDeviceStateIdle;b->OnApplicationEvent();assert(sleeping);
  assert(pm_callbacks.exit_cb(1000000,pm_callbacks.exit_cb_user_arg)==ESP_OK);
  Button::click[1]();a.Drain();b->OnApplicationEvent();
- assert(!sleeping && a.buffered && w.starts==1 && a.captures==1);
+ assert(!sleeping && a.buffered && a.cue && w.starts==0 && a.captures==1);
  assert(usb_disconnected && usb_timer->delay==100000 && no_sleep_count==1);
  fire(usb_timer);a.Drain();
  assert(!usb_disconnected && no_sleep_count==0 && trace_timer->delay==800000);
+ monotonic+=1000000;b->OnApplicationEvent();assert(w.starts==0);
+ a.CompleteCue(60000);b->OnApplicationEvent();assert(cue_tail_timer->delay==60000 && w.starts==0);
+ monotonic+=59999;b->OnApplicationEvent();assert(w.starts==0);
+ ++monotonic;fire(cue_tail_timer);a.Drain();b->OnApplicationEvent();
+ assert(w.starts==1 && a.buffered);
  w.connected=true;b->OnApplicationEvent();assert(a.state==kDeviceStateListening);
  monotonic+=999000000;b->OnApplicationEvent();assert(!sleeping && w.stops==1);
  a.state=kDeviceStateIdle;b->OnApplicationEvent();
@@ -254,9 +271,14 @@ int main(){
  Button::click[1]();a.Drain();b->OnApplicationEvent();assert(a.buffered && usb_disconnected);
  fire(usb_timer);a.Drain();assert(!usb_disconnected && trace_timer->delay==800000);
  fire(trace_timer);a.Drain();
- monotonic+=8000000;b->OnApplicationEvent();assert(!a.buffered && sleeping);
+ monotonic+=1000000;a.CompleteCue(0);b->OnApplicationEvent();assert(w.starts==2);
+ monotonic+=7999999;b->OnApplicationEvent();assert(a.buffered);
+ ++monotonic;b->OnApplicationEvent();assert(!a.buffered && sleeping);
  Button::click[1]();a.Drain();b->OnApplicationEvent();assert(a.buffered);
- Button::click[1]();a.Drain();b->OnApplicationEvent();assert(!a.buffered && sleeping);
+ a.CompleteCue(60000);b->OnApplicationEvent();assert(cue_tail_timer->delay==60000);
+ monotonic+=60000;fire(cue_tail_timer);
+ Button::click[1]();a.Drain();b->OnApplicationEvent();
+ assert(!a.buffered && sleeping && w.starts==2);
  // A queued single click waiting for playback must not run again after cancellation.
  a.audio.idle=false;Button::click[1]();a.Drain();assert(!a.buffered);
  a.audio.idle=true;b->OnApplicationEvent();assert(a.buffered);

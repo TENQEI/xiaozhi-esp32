@@ -105,6 +105,9 @@ public:
     void CloseAfterCurrentReply();
     bool IsConnectionOpening() const { return buffered_open_in_progress_; }
     bool HasBufferedConversation() const { return buffered_conversation_; }
+    bool IsBufferedConversationCuePending() const {
+        return buffered_conversation_ && session_sound_pending_;
+    }
 
     /**
      * Start listening (event-based, thread-safe)

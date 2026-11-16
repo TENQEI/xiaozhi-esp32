@@ -38,9 +38,12 @@ private:
     bool countdown_second_clip_ = false;
     bool suppress_d0_gesture_ = false;
 
+    static constexpr int64_t kConnectionTimeoutUs = 8LL * 1000000;
     flower::PowerPolicy power_;
     bool offline_ = false;
     bool reconnecting_ = false;
+    bool wifi_start_pending_ = false;
+    esp_timer_handle_t cue_tail_timer_ = nullptr;
     bool button_pending_ = false;
     bool config_pending_ = false;
     bool light_sleep_ = false;
@@ -180,7 +183,7 @@ private:
         if (!app.IsPriorityPlayback()) {
             SetLightSleep(false);
             hourly_chime_.Tick(true);
-            reconnecting_ = false;
+            StopReconnect();
             button_pending_ = false;
             config_pending_ = false;
             countdown_second_clip_ =
@@ -210,13 +213,58 @@ private:
         return ringing;
     }
 
+    void StopReconnect() {
+        reconnecting_ = false;
+        wifi_start_pending_ = false;
+        esp_timer_stop(cue_tail_timer_);
+    }
+
+    void AdvanceReconnect(int64_t now) {
+        auto& app = Application::GetInstance();
+        auto& wifi = WifiManager::GetInstance();
+        if (!app.HasBufferedConversation()) {
+            StopReconnect();
+            return;
+        }
+        if (!offline_ && wifi.IsConnected()) {
+            StopReconnect();
+            TraceWakeEvent("Wi-Fi ready");
+            app.ConnectBufferedConversation();
+            return;
+        }
+        if (now >= connection_deadline_) {
+            TraceWakeEvent(wifi_start_pending_ ? "start cue timeout" : "Wi-Fi timeout");
+            StopReconnect();
+            app.CancelBufferedConversation();
+            power_.Expire();
+            app.PlaySound(Lang::Sounds::OGG_EXCLAMATION);
+            return;
+        }
+        if (!wifi_start_pending_ || app.IsBufferedConversationCuePending())
+            return;
+
+        // Playback may be drained in software while samples are still queued in I2S DMA.
+        const auto tail_us = app.GetAudioService().MicrophoneCueTailRemainingUs();
+        if (tail_us > 0) {
+            if (!esp_timer_is_active(cue_tail_timer_))
+                ESP_ERROR_CHECK(esp_timer_start_once(cue_tail_timer_, tail_us));
+            return;
+        }
+        wifi_start_pending_ = false;
+        offline_ = false;
+        connection_deadline_ = esp_timer_get_time() + kConnectionTimeoutUs;
+        TraceWakeEvent("Wi-Fi start");
+        WifiBoard::SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
+        wifi.StartStation();
+    }
+
     void HandleButton() {
         button_pending_ = false;
         auto& app = Application::GetInstance();
         SetLightSleep(false);
         hourly_chime_.ResetPhraseTimer();
         if (reconnecting_ || app.HasBufferedConversation()) {
-            reconnecting_ = false;
+            StopReconnect();
             app.CancelBufferedConversation();
             power_.Expire();
             return;
@@ -230,8 +278,9 @@ private:
             app.ToggleChatState();
             return;
         }
-        WifiBoard::SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
-        if (!offline_ && WifiManager::GetInstance().IsConnected() && !countdown_.Deadline()) {
+        const bool needs_wifi = offline_ || !WifiManager::GetInstance().IsConnected();
+        if (!needs_wifi && !countdown_.Deadline()) {
+            WifiBoard::SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
             app.ToggleChatState();  // Preserve the existing online session-start cue.
             return;
         }
@@ -242,13 +291,8 @@ private:
         }
         button_pending_ = false;
         reconnecting_ = true;
-        connection_deadline_ = esp_timer_get_time() + 8LL * 1000000;
-        // StartStation is asynchronous. Keep recording while association/DHCP run.
-        if (offline_ || !WifiManager::GetInstance().IsConnected()) {
-            offline_ = false;
-            TraceWakeEvent("Wi-Fi start");
-            WifiManager::GetInstance().StartStation();
-        }
+        wifi_start_pending_ = needs_wifi;
+        connection_deadline_ = esp_timer_get_time() + kConnectionTimeoutUs;
     }
 
     void InitializeTools() {
@@ -302,7 +346,7 @@ public:
                         return;
                     SetLightSleep(false);
                     offline_ = false;
-                    reconnecting_ = false;
+                    StopReconnect();
                     auto& app = Application::GetInstance();
                     app.CancelBufferedConversation();
                     button_pending_ = false;
@@ -347,6 +391,10 @@ public:
         };
         timer.name = "flower_countdown";
         ESP_ERROR_CHECK(esp_timer_create(&timer, &countdown_wake_));
+        // Wake the main loop so OnApplicationEvent() can start Wi-Fi after the DMA tail.
+        timer.callback = [](void*) { Application::GetInstance().Schedule([]() {}); };
+        timer.name = "flower_cue_tail";
+        ESP_ERROR_CHECK(esp_timer_create(&timer, &cue_tail_timer_));
         InitializeTools();
     }
 
@@ -376,21 +424,8 @@ public:
         if (button_pending_ && app.GetDeviceState() == kDeviceStateIdle &&
             app.GetAudioService().IsPlaybackIdle())
             HandleButton();
-        if (reconnecting_) {
-            if (!app.HasBufferedConversation()) {
-                reconnecting_ = false;
-            } else if (WifiManager::GetInstance().IsConnected()) {
-                reconnecting_ = false;
-                TraceWakeEvent("Wi-Fi ready");
-                app.ConnectBufferedConversation();
-            } else if (now >= connection_deadline_) {
-                reconnecting_ = false;
-                TraceWakeEvent("Wi-Fi timeout");
-                app.CancelBufferedConversation();
-                power_.Expire();
-                app.PlaySound(Lang::Sounds::OGG_EXCLAMATION);
-            }
-        }
+        if (reconnecting_)
+            AdvanceReconnect(now);
         const auto state = app.GetDeviceState();
         const bool conversation = state == kDeviceStateConnecting ||
                                   state == kDeviceStateListening || state == kDeviceStateSpeaking ||
