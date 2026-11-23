@@ -261,9 +261,14 @@ class FlowerScheduleTest(unittest.TestCase):
             #include <cassert>
             using namespace flower;
             constexpr std::time_t day = 1762041600; // 2025-11-02 civil midnight
+            ChimeConfig SameDailySchedule(int count, int night, int morning, bool greetings = false) {
+                GreetingTimes times{morning, night};
+                return {count, true, {times, times}, greetings, greetings};
+            }
             int main() {
                 ChimeConfig defaults{24, true};
-                assert(defaults.quiet_start == 20 && defaults.quiet_end == 8);
+                assert(defaults.greetings.NightMinute() == 20 * 60 &&
+                       defaults.greetings.MorningMinute() == 8 * 60);
                 defaults.good_morning = defaults.good_night = true;
                 for (int h : {7, 8, 19, 20}) {
                     ChimeSchedule schedule;
@@ -327,7 +332,7 @@ class FlowerScheduleTest(unittest.TestCase):
                     assert(IsQuietHour(h, 8, 12) == (h >= 8 && h < 12));
                     assert(!IsQuietHour(h, 0, 0));
                 }
-                ChimeConfig c{24, true, 20, 4};
+                auto c = SameDailySchedule(24, 20 * 60, 4 * 60);
                 for (int h : {0, 4, 12, 19, 20, 23}) {
                     ChimeSchedule s;
                     assert(s.Poll(day + h * 3600 - 1, c, true) == -1);
@@ -351,24 +356,24 @@ class FlowerScheduleTest(unittest.TestCase):
                 assert(s.Poll(day + 17 * 3600 - 1, c, true) == -1);
                 c.enabled = false;
                 assert(s.Poll(day + 17 * 3600, c, true) == -1);
-                c = {12, true, 0, 0};
+                c = SameDailySchedule(12, 0, 0);
                 assert(s.Poll(day + 86400 - 1, c, true) == -1);
                 assert(s.Poll(day + 86400, c, true) == 11); // next day, 12 o'clock
                 // Greetings are exceptions at the quiet boundaries, with priority
                 // over ordinary hourly audio. Check wrapped and daytime windows.
-                for (auto quiet : {ChimeConfig{24, true, 20, 4, true, true},
-                                   ChimeConfig{24, true, 8, 12, true, true},
-                                   ChimeConfig{0, true, 0, 8, true, true}}) {
-                    for (int hour : {quiet.quiet_start, quiet.quiet_end}) {
+                for (auto quiet : {SameDailySchedule(24, 20 * 60, 4 * 60, true),
+                                   SameDailySchedule(24, 8 * 60, 12 * 60, true),
+                                   SameDailySchedule(0, 0, 8 * 60, true)}) {
+                    for (int minute : {quiet.greetings.NightMinute(), quiet.greetings.MorningMinute()}) {
                         ChimeSchedule greeting;
-                        assert(greeting.Poll(day + hour * 3600 - 1, quiet, true) == -1);
-                        int expected = hour == quiet.quiet_start ? ChimeSchedule::kGoodNight
-                                                                 : ChimeSchedule::kGoodMorning;
-                        assert(greeting.Poll(day + hour * 3600, quiet, true) == expected);
-                        assert(greeting.Poll(day + hour * 3600 + 1, quiet, true) == -1);
+                        assert(greeting.Poll(day + minute * 60 - 1, quiet, true) == -1);
+                        int expected = minute == quiet.greetings.NightMinute()
+                                           ? ChimeSchedule::kGoodNight : ChimeSchedule::kGoodMorning;
+                        assert(greeting.Poll(day + minute * 60, quiet, true) == expected);
+                        assert(greeting.Poll(day + minute * 60 + 1, quiet, true) == -1);
                     }
                 }
-                c = {24, true, 20, 4, true, true};
+                c = SameDailySchedule(24, 20 * 60, 4 * 60, true);
                 ChimeSchedule busy;
                 busy.Poll(day + 20 * 3600 - 1, c, true);
                 assert(busy.Poll(day + 20 * 3600, c, false) == -1);
@@ -380,17 +385,17 @@ class FlowerScheduleTest(unittest.TestCase):
                 ChimeSchedule disabled;
                 disabled.Poll(day + 4 * 3600 - 1, c, true);
                 assert(disabled.Poll(day + 4 * 3600, c, true) == -1);
-                c = {24, true, 4, 4, true, true};
+                c = SameDailySchedule(24, 4 * 60, 4 * 60, true);
                 ChimeSchedule no_quiet;
                 no_quiet.Poll(day + 4 * 3600 - 1, c, true);
                 assert(no_quiet.Poll(day + 4 * 3600, c, true) == 4);
-                c = {24, true, 20, 4, false, false};
+                c = SameDailySchedule(24, 20 * 60, 4 * 60);
                 ChimeSchedule no_morning;
                 no_morning.Poll(day + 4 * 3600 - 1, c, true);
                 assert(no_morning.Poll(day + 4 * 3600, c, true) == 4);
                 // MCP overrides have minute precision. Hourly clips still play
                 // only on the hour; greeting boundaries use the same quiet window.
-                c = {24, true, 20, 8, true, true, 15, 30};
+                c = SameDailySchedule(24, 20 * 60 + 15, 8 * 60 + 30, true);
                 for (int minute : {8 * 60, 8 * 60 + 30, 9 * 60, 20 * 60,
                                    20 * 60 + 15, 21 * 60}) {
                     ChimeSchedule precise;
@@ -402,7 +407,7 @@ class FlowerScheduleTest(unittest.TestCase):
                     assert(precise.Poll(day + minute * 60 + 3, c, true) == -1);
                 }
                 // A quiet window can start and end within the same hour.
-                c = {24, true, 8, 8, true, true, 10, 30};
+                c = SameDailySchedule(24, 8 * 60 + 10, 8 * 60 + 30, true);
                 ChimeSchedule short_window;
                 short_window.Poll(day + 8 * 3600 + 10 * 60 - 1, c, true);
                 assert(short_window.Poll(day + 8 * 3600 + 10 * 60, c, true) ==
@@ -410,7 +415,7 @@ class FlowerScheduleTest(unittest.TestCase):
                 short_window.Poll(day + 8 * 3600 + 30 * 60 - 1, c, true);
                 assert(short_window.Poll(day + 8 * 3600 + 30 * 60, c, true) ==
                        ChimeSchedule::kGoodMorning);
-                c = {24, true, 20, 8, true, true, 15, 30};
+                c = SameDailySchedule(24, 20 * 60 + 15, 8 * 60 + 30, true);
                 ChimeSchedule minute_busy;
                 minute_busy.Poll(day + 8 * 3600 + 30 * 60 - 1, c, true);
                 assert(minute_busy.Poll(day + 8 * 3600 + 30 * 60, c, false) == -1);
@@ -419,13 +424,13 @@ class FlowerScheduleTest(unittest.TestCase):
                 ChimeSchedule edited;
                 edited.Poll(day + 8 * 3600 + 30 * 60 - 1, c, true);
                 assert(edited.Poll(day + 8 * 3600 + 30 * 60, c, true) == ChimeSchedule::kGoodMorning);
-                c.quiet_end_minute = 29;
+                c = SameDailySchedule(24, 20 * 60 + 15, 8 * 60 + 29, true);
                 assert(edited.Poll(day + 8 * 3600 + 30 * 60 + 1, c, true) == -1);
-                c.quiet_end_minute = 31;
+                c = SameDailySchedule(24, 20 * 60 + 15, 8 * 60 + 31, true);
                 edited.Poll(day + 8 * 3600 + 31 * 60 - 1, c, true);
                 assert(edited.Poll(day + 8 * 3600 + 31 * 60, c, true) == ChimeSchedule::kGoodMorning);
                 edited.Poll(day + 8 * 3600 + 30 * 60 - 1, c, true);
-                c.quiet_end_minute = 30;
+                c = SameDailySchedule(24, 20 * 60 + 15, 8 * 60 + 30, true);
                 assert(edited.Poll(day + 8 * 3600 + 30 * 60, c, true) == -1);
             }
         '''

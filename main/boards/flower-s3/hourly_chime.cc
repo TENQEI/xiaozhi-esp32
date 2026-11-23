@@ -10,15 +10,12 @@ namespace flower {
 void HourlyChime::Tick(bool suppressed) {
     auto& app = Application::GetInstance();
     const auto now = std::time(nullptr);
-    const auto times = TimesForDate(times_.GetSchedule(), now);
+    const auto greetings = GreetingsForDate(times_.GetSchedule(), now);
     config_ = {12,
                audio_.AutomaticEnabled() && times_.AnnouncementsEnabled(),
-               times.night / 60,
-               times.morning / 60,
+               greetings,
                audio_.GreetingEnabled(true),
-               audio_.GreetingEnabled(false),
-               times.night % 60,
-               times.morning % 60};
+               audio_.GreetingEnabled(false)};
     const bool idle = !suppressed && app.GetDeviceState() == kDeviceStateIdle;
     const int index = schedule_.Poll(now, config_, idle);
     if (index >= 0) {
@@ -30,7 +27,7 @@ void HourlyChime::Tick(bool suppressed) {
     const int second = static_cast<int>(now % 86400);
     if (!config_.enabled || PhraseHour(now) < 0 || !idle || index != -1 ||
         !app.GetAudioService().IsPlaybackIdle() ||
-        IsQuietHour(second / 60, times.night, times.morning)) {
+        greetings.IsQuiet(second / 60)) {
         ResetPhraseTimer();
         return;
     }
@@ -45,9 +42,9 @@ void HourlyChime::Tick(bool suppressed) {
         ResetPhraseTimer();
         // Allow a full local clip to finish before the next scheduled announcement.
         constexpr int kGuardSeconds = 62;
-        const int until_night = (times.night * 60 - second + 86400) % 86400;
+        const int night = greetings.NightMinute();
         if (3600 - second % 3600 > kGuardSeconds &&
-            (times.night == times.morning || until_night > kGuardSeconds)) {
+            (night < 0 || (night * 60 - second + 86400) % 86400 > kGuardSeconds)) {
             audio_.PlayPhrase();
         }
     }

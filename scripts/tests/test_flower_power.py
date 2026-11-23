@@ -14,6 +14,7 @@ class FlowerPowerTest(unittest.TestCase):
     def test_deadlines_wake_schedule_and_no_catchup(self):
         source = r'''
 #include "power_policy.h"
+#include "chime_schedule.h"
 #include <cassert>
 using namespace flower;
 std::time_t date(int day, int hour, int minute=0, int second=0) {
@@ -49,12 +50,15 @@ int main() {
     assert(next(date(9,8,30))==date(9,9));
     assert(next(date(9,20,1))==date(9,20,15)); // non-hour goodnight
     assert(next(date(9,20,16))==date(10,8,30)); // no overnight hour wake
-    assert(next(date(6,20,16))==date(7,9,30)); // Friday -> Saturday
-    assert(next(date(8,22,16))==date(9,8,30)); // Sunday -> Monday
+    assert(next(date(6,22,1))==date(6,22,15)); // Friday uses Saturday's night
+    assert(next(date(6,22,16))==date(7,9,30));
+    assert(next(date(7,22,1))==date(7,22,15));
+    assert(next(date(8,20,1))==date(8,20,15)); // Sunday uses Monday's night
+    assert(next(date(8,20,16))==date(9,8,30));
     assert(next(date(9,20,1),true,true,false)==date(10,8,30));
     settings.workday = {480,1200};
     assert(next(date(9,7))==date(9,8));
-    ChimeConfig c{12,true,20,8,true,true,0,0};
+    ChimeConfig c{12,true,{{480,1200},{480,1200}},true,true};
     ChimeSchedule clock;
     auto morning=date(9,8);
     assert(clock.Poll(morning-2,c,true)==-1); // prewake seeds clock

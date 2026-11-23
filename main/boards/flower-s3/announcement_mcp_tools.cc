@@ -77,14 +77,16 @@ void InitializeAnnouncementTools(GreetingTimeSettings& settings) {
             return Status(settings);
         });
     server.AddTool("self.flower.get_greeting_times",
-                   "查询工作日（周一至周五）和双休（周六、周日）的早安、晚安时间。返回 "
-                   "HH:MM，使用设备本地时间。",
+                   "查询工作日和双休的早安、晚安时间，返回设备本地时间 HH:MM。"
+                   "早安按当天选择，晚安按次日选择。双休晚安在周五、周六播报，"
+                   "双休早安在周六、周日播报。",
                    PropertyList(),
                    [&settings](const PropertyList&) -> ToolResult { return TimeStatus(settings); });
     server.AddTool(
         "self.flower.set_greeting_times",
         "设置早安和晚安时间，morning、night 必须为 24 小时制 HH:MM。"
-        "scope=all 表示每天相同（默认），workday 表示仅周一至周五，restday 表示仅周六、周日。"
+        "scope=all 表示每天相同（默认）。workday 适用周一至周五早安、周日至周四晚安。"
+        "restday 适用周六、周日早安和周五、周六晚安。"
         "例如每天早上八点和晚上八点：morning=08:00，night=20:00，scope=all。"
         "只修改一个时间时，先查询并保留同一时段的另一时间。保存后立即生效，重启保留，不补播。"
         "早晚安相同表示该时段关闭免打扰及早晚安。不会打开或关闭自动播报总开关。",

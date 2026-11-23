@@ -26,9 +26,7 @@ class FlowerCalendarTest(unittest.TestCase):
                 return timegm(&value);
             }
             ChimeConfig Config(const GreetingSchedule& schedule, std::time_t now) {
-                auto times=TimesForDate(schedule, now);
-                return {24, true, times.night/60, times.morning/60, true, true,
-                        times.night%60, times.morning%60};
+                return {24, true, GreetingsForDate(schedule, now), true, true};
             }
             int Event(const GreetingSchedule& settings, std::time_t now) {
                 ChimeSchedule scheduler;
@@ -36,37 +34,46 @@ class FlowerCalendarTest(unittest.TestCase):
                 return scheduler.Poll(now, Config(settings, now), true);
             }
             int main() {
-                GreetingSchedule settings{{480, 1200}, {570, 1335}};
+                GreetingSchedule settings{{480, 1200}, {570, 1290}};
                 assert(ValidSchedule(settings));
-                assert(!ValidSchedule({{-1, 1200}, {570, 1335}}));
-                assert(TimesForDate(settings, Date(2026,11,6)).morning==480); // Friday
-                assert(TimesForDate(settings, Date(2026,11,7)).morning==570);
-                assert(TimesForDate(settings, Date(2026,11,8)).morning==570);
-                assert(TimesForDate(settings, Date(2026,11,9)).morning==480);
+                assert(!ValidSchedule({{-1, 1200}, {570, 1290}}));
+                assert(GreetingsForDate(settings, Date(2026,11,6)).MorningMinute()==480); // Friday
+                assert(GreetingsForDate(settings, Date(2026,11,7)).MorningMinute()==570);
+                assert(GreetingsForDate(settings, Date(2026,11,8)).MorningMinute()==570);
+                assert(GreetingsForDate(settings, Date(2026,11,9)).MorningMinute()==480);
                 // Fixed weekdays: makeup Sundays remain weekend, and weekday
                 // public holidays remain weekdays. No annual holiday data is needed.
-                assert(TimesForDate(settings, Date(2026,1,4)).morning==570);
-                assert(TimesForDate(settings, Date(2026,1,2)).morning==480);
-                assert(TimesForDate(settings, Date(2027,1,1)).morning==480);
-                assert(TimesForDate(settings, Date(2027,1,2)).morning==570);
+                assert(GreetingsForDate(settings, Date(2026,1,4)).MorningMinute()==570);
+                assert(GreetingsForDate(settings, Date(2026,1,2)).MorningMinute()==480);
+                assert(GreetingsForDate(settings, Date(2027,1,1)).MorningMinute()==480);
+                assert(GreetingsForDate(settings, Date(2027,1,2)).MorningMinute()==570);
                 // The OTA-adjusted civil clock must not receive a second TZ offset.
                 setenv("TZ", "CST-8", 1); tzset();
-                assert(TimesForDate(settings, Date(2026,11,6,23,59)).morning==480);
-                assert(TimesForDate(settings, Date(2026,11,7)).morning==570);
+                assert(GreetingsForDate(settings, Date(2026,11,6,23,59)).MorningMinute()==480);
+                assert(GreetingsForDate(settings, Date(2026,11,7)).MorningMinute()==570);
 
-                assert(Event(settings, Date(2026,11,6,20))==ChimeSchedule::kGoodNight);
+                assert(Event(settings, Date(2026,11,5,20))==ChimeSchedule::kGoodNight);
+                assert(Event(settings, Date(2026,11,6,20))==20);
+                assert(Event(settings, Date(2026,11,6,21,30))==ChimeSchedule::kGoodNight);
+                assert(Event(settings, Date(2026,11,6,22))==-1);
                 assert(Event(settings, Date(2026,11,7))==-1); // midnight remains quiet
                 assert(Event(settings, Date(2026,11,7,8))==-1);
                 assert(Event(settings, Date(2026,11,7,9))==-1);
                 assert(Event(settings, Date(2026,11,7,9,30))==ChimeSchedule::kGoodMorning);
                 assert(Event(settings, Date(2026,11,7,10))==10);
-                assert(Event(settings, Date(2026,11,8,22,15))==ChimeSchedule::kGoodNight);
+                assert(Event(settings, Date(2026,11,7,21,30))==ChimeSchedule::kGoodNight);
+                assert(Event(settings, Date(2026,11,8,9,30))==ChimeSchedule::kGoodMorning);
+                assert(Event(settings, Date(2026,11,8,20))==ChimeSchedule::kGoodNight);
+                assert(Event(settings, Date(2026,11,8,21,30))==-1);
                 assert(Event(settings, Date(2026,11,9,7))==-1);
                 assert(Event(settings, Date(2026,11,9,8))==ChimeSchedule::kGoodMorning);
                 assert(Event(settings, Date(2026,1,4,8))==-1);
                 assert(Event(settings, Date(2026,1,2,8))==ChimeSchedule::kGoodMorning);
                 settings.restday={540,540}; // disable only weekend quiet/greetings
+                assert(Event(settings, Date(2026,11,6,8))==ChimeSchedule::kGoodMorning);
+                assert(Event(settings, Date(2026,11,6,21))==21);
                 assert(Event(settings, Date(2026,11,7,9))==9);
+                assert(Event(settings, Date(2026,11,8,20))==ChimeSchedule::kGoodNight);
                 assert(Event(settings, Date(2026,11,9,8))==ChimeSchedule::kGoodMorning);
             }
         '''

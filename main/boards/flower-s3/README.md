@@ -189,7 +189,9 @@ python scripts/generate_flower_placeholders.py
 | `self.flower.get_greeting_times` | 无 | `work_morning`、`work_night`、`rest_morning`、`rest_night`，均为 `HH:MM` |
 | `self.flower.set_greeting_times` | 必填 `morning`、`night`，24 小时制 `HH:MM`；可选 `scope` | 保存后的两套时间；保存失败返回工具错误 |
 
-`scope` 为 `all`（默认，每天相同）、`workday`（仅工作日）或 `restday`（仅双休）。
+`scope` 为 `all`（默认，每天相同）、`workday`（工作日）或 `restday`（双休）。
+早安按当天选择，晚安按次日选择。双休晚安在周五、周六晚上播，双休早安在周六、周日早上播。
+周日晚上使用工作日晚安，免打扰延续到周一工作日早安。
 例如“工作日早安改为七点半、晚安改为九点”，调用
 `self.flower.set_greeting_times`，参数 `{"morning":"07:30","night":"21:00","scope":"workday"}`。
 只改早安或晚安时，先查询当前设置，保留同一时段的另一时间。

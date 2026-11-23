@@ -2,7 +2,6 @@
 #define FLOWER_POWER_POLICY_H_
 
 #include <cstdint>
-#include "chime_schedule.h"
 #include "greeting_schedule.h"
 
 namespace flower {
@@ -44,20 +43,13 @@ inline std::time_t NextAnnouncementWake(std::time_t now, const GreetingSchedule&
     const auto minute = now - now % 60;
     for (int i = 1; i <= 8 * 1440; ++i) {
         const auto candidate = minute + i * 60;
-        const auto times = TimesForDate(settings, candidate);
+        const auto greetings = GreetingsForDate(settings, candidate);
         const int civil_minute = static_cast<int>(candidate / 60 % 1440);
-        if (times.morning != times.night &&
-            (civil_minute == times.morning || (night && civil_minute == times.night)))
+        if (civil_minute == greetings.MorningMinute() ||
+            (night && civil_minute == greetings.NightMinute()))
             return candidate;
-        if (civil_minute % 60 == 0 && !IsQuietHour(civil_minute, times.night, times.morning))
+        if (civil_minute % 60 == 0 && !greetings.IsQuiet(civil_minute))
             return candidate;
-        // A date change may select a different quiet window; only wake if it opens.
-        if (civil_minute == 0) {
-            const auto before = TimesForDate(settings, candidate - 1);
-            if (IsQuietHour(1439, before.night, before.morning) &&
-                !IsQuietHour(0, times.night, times.morning))
-                return candidate;
-        }
     }
     (void)morning;
     return 0;

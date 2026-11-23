@@ -1,6 +1,8 @@
 #ifndef FLOWER_CHIME_SCHEDULE_H_
 #define FLOWER_CHIME_SCHEDULE_H_
 
+#include "greeting_schedule.h"
+
 #include <algorithm>
 #include <cstdint>
 #include <ctime>
@@ -10,12 +12,9 @@ namespace flower {
 struct ChimeConfig {
     int count = 0;
     bool enabled = false;
-    int quiet_start = 20;
-    int quiet_end = 8;
+    GreetingDay greetings = {};
     bool good_morning = false;
     bool good_night = false;
-    int quiet_start_minute = 0;
-    int quiet_end_minute = 0;
 };
 
 inline int ChimeIndex(int hour, int count) {
@@ -29,13 +28,6 @@ inline int ChimeIndex(int hour, int count) {
         return (hour + 11) % 12;  // 00:00/12:00 use the twelfth recording.
     }
     return count == 24 ? hour : -1;
-}
-
-inline bool IsQuietHour(int hour, int start, int end) {
-    if (start == end) {
-        return false;
-    }
-    return start < end ? hour >= start && hour < end : hour >= start || hour < end;
 }
 
 // Pure policy, called from the main task. Timestamp is the upstream clock,
@@ -66,19 +58,15 @@ public:
         }
         const int hour = static_cast<int>(hour_key % 24);
         const int minute = static_cast<int>(minute_key % 1440);
-        const int start = config.quiet_start * 60 + config.quiet_start_minute;
-        const int end = config.quiet_end * 60 + config.quiet_end_minute;
         // Boundary greetings take precedence over hourly clips, including the
         // good-night clip at the first instant of the quiet window.
-        if (start != end) {
-            if (minute == start && config.good_night) {
-                return kGoodNight;
-            }
-            if (minute == end && config.good_morning) {
-                return kGoodMorning;
-            }
+        if (config.good_night && minute == config.greetings.NightMinute()) {
+            return kGoodNight;
         }
-        if (!new_hour || now % 3600 > 5 || IsQuietHour(minute, start, end)) {
+        if (config.good_morning && minute == config.greetings.MorningMinute()) {
+            return kGoodMorning;
+        }
+        if (!new_hour || now % 3600 > 5 || config.greetings.IsQuiet(minute)) {
             return -1;
         }
         return ChimeIndex(hour, config.count);
