@@ -14,12 +14,13 @@
 #include <cstdint>
 #include <vector>
 
-#include "protocol.h"
-#include "ota.h"
+#include "audio/session_lifecycle.h"
 #include "audio_service.h"
 #include "device_state.h"
 #include "device_state_machine.h"
 #include "notify/notify_player.h"
+#include "ota.h"
+#include "protocol.h"
 
 // Main event bits
 #define MAIN_EVENT_SCHEDULE             (1 << 0)
@@ -37,6 +38,7 @@
 #define MAIN_EVENT_STATE_CHANGED        (1 << 12)
 #define MAIN_EVENT_PLAYBACK_DRAINED     (1 << 13)
 #define MAIN_EVENT_STARTUP_HINT_TIMEOUT (1 << 14)
+#define MAIN_EVENT_MIC_BUFFER_PROGRESS  (1 << 15)
 
 enum AecMode {
     kAecOff,
@@ -95,6 +97,16 @@ public:
      * Sends MAIN_EVENT_TOGGLE_CHAT to be handled in Run()
      */
     void ToggleChatState();
+    // Application-task only: capture the button-triggered utterance while connecting.
+    bool BeginBufferedConversation(std::function<void()> start_network = {});
+    void StartBufferedConversationCue();
+    bool PrepareForNetworkSleep();
+    void ConnectBufferedConversation();
+    void CancelBufferedConversation();
+    bool HasOpenConversation() const;
+    void CloseAfterCurrentReply();
+    bool IsConnectionOpening() const { return buffered_open_in_progress_; }
+    bool HasBufferedConversation() const { return buffered_conversation_; }
 
     /**
      * Start listening (event-based, thread-safe)
@@ -117,6 +129,14 @@ public:
     void SetAecMode(AecMode mode);
     AecMode GetAecMode() const { return aec_mode_; }
     void PlaySound(const std::string_view& sound);
+    // Application-task only; bounded, cancellable playback of a local asset.
+    bool PlayLocalNotification(const std::string& asset_name);
+    // Application-task only; the input is copied into the bounded async player.
+    bool PlayLocalAudio(std::string_view ogg);
+    bool PlayPriorityLocalAudio(std::string_view ogg);
+    bool BeginPriorityPlayback(std::string_view first_clip);
+    void EndPriorityPlayback();
+    bool IsPriorityPlayback() const { return priority_playback_; }
     AudioService& GetAudioService() { return audio_service_; }
     
     /**
@@ -132,7 +152,7 @@ private:
 
     std::mutex mutex_;
     std::deque<std::function<void()>> main_tasks_;
-    std::unique_ptr<Protocol> protocol_;
+    std::shared_ptr<Protocol> protocol_;
     EventGroupHandle_t event_group_ = nullptr;
     esp_timer_handle_t clock_timer_handle_ = nullptr;
     esp_timer_handle_t startup_wake_word_hint_timer_ = nullptr;
@@ -143,7 +163,17 @@ private:
     std::string startup_wake_word_hint_message_;
     AudioService audio_service_;
     NotifyPlayer notify_player_;
+    NotifyPlayer priority_player_;
+    std::atomic<bool> priority_playback_{false};
+    std::atomic<uint32_t> playback_cutoff_generation_{0};
+    bool priority_clip_playing_ = false;
+    bool reply_playback_pending_ = false;
+    int64_t close_after_reply_deadline_ = 0;
     uint32_t notification_playback_id_ = 0;
+    SessionLifecycle session_;
+    bool session_sound_pending_ = false;
+    bool suppress_next_popup_ = false;
+    std::function<void()> session_sound_continuation_;
     std::unique_ptr<Ota> ota_;
 
     std::function<void(const std::string&)> mcp_broadcast_callback_;
@@ -155,6 +185,14 @@ private:
     bool assets_version_checked_ = false;
     bool play_popup_on_listening_ = false;  // Flag to play popup sound after state changes to listening
     bool pending_listening_start_ = false;  // Waiting for playback to drain before starting listening (auto mode)
+    std::atomic<bool> buffered_open_in_progress_{false};
+    void FinishBufferedConnection(std::shared_ptr<Protocol> protocol, bool connected);
+    bool buffered_conversation_ = false;
+    bool buffered_cue_started_ = false;
+    bool buffered_connection_ready_ = false;
+    bool buffered_connection_failed_ = false;
+    bool trace_first_buffered_audio_ = false;
+    void CompleteBufferedStart();
     int clock_ticks_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;
 
@@ -171,11 +209,23 @@ private:
     void ContinueOpenAudioChannel(ListeningMode mode);
     void BeginWakeWordInvoke(const std::string& wake_word);
     void ContinueWakeWordInvoke(const std::string& wake_word);
+    void BeginConversation(ListeningMode mode, std::function<void()> ready);
+    void CancelSessionSound();
+    void CancelConversation();
+    void HandleAudioChannelClosed();
+    void CloseConversationSilently();
+    void DiscardConversationAudio();
+    void CloseActiveAudioChannel();
+    void HandleTtsStopped();
+    void FinishReplyPlayback();
+    void ClearReplyPlayback();
     void StartListeningAudio();
     void ConfigureWakeWordForListening();
     void ShowStartupWakeWordHint();
+    void PlayReadySound(bool first_startup);
     void HideStartupWakeWordHint();
-    void StartNotification(std::string audio_url, std::vector<NotifySubtitle> subtitles);
+    bool StartNotification(std::string audio_url, std::vector<NotifySubtitle> subtitles,
+                           std::string local_audio = {});
     void StopNotification();
     void HandleNotificationFinished(uint32_t playback_id, bool success);
 

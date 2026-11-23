@@ -6,6 +6,7 @@
 #include <condition_variable>
 #include <memory>
 #include <mutex>
+#include <optional>
 
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
@@ -42,6 +43,7 @@
 #define MAX_PLAYBACK_TASKS_IN_QUEUE 2
 #define MAX_DECODE_PACKETS_IN_QUEUE (1200 / OPUS_FRAME_DURATION_MS)
 #define MAX_SEND_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
+#define MAX_BUFFERED_MIC_PACKETS (10000 / OPUS_FRAME_DURATION_MS)
 #define AUDIO_TESTING_MAX_DURATION_MS 10000
 #define MAX_TIMESTAMPS_IN_QUEUE 3
 
@@ -81,6 +83,7 @@
 
 struct AudioServiceCallbacks {
     std::function<void(void)> on_send_queue_available;
+    std::function<void()> on_microphone_buffer_progress;
     std::function<void(const std::string&)> on_wake_word_detected;
     std::function<void(bool)> on_vad_change;
     std::function<void(void)> on_audio_testing_queue_full;
@@ -99,6 +102,7 @@ struct AudioTask {
     AudioTaskType type;
     std::vector<int16_t> pcm;
     uint32_t timestamp = 0;
+    uint32_t capture_generation = 0;
     uint32_t playback_id = 0;
     uint32_t media_position_ms = 0;
 };
@@ -137,15 +141,26 @@ public:
     void EnableWakeWordDetection(bool enable);
     void ReleaseWakeWordResources();
     void EnableVoiceProcessing(bool enable);
+    bool BeginMicrophoneBuffer(bool cue_playing = false);
+    bool IsMicrophoneBufferReady();
+    bool IsMicrophoneBufferCapturing();
+    void ReleaseMicrophoneAfterCue();
+    bool MicrophoneBufferOverflowed();
+    bool PrepareForSleep();
+    void EndMicrophoneBuffer(bool send);
     void EnableAudioTesting(bool enable);
     void EnableDeviceAec(bool enable);
 
     void SetCallbacks(AudioServiceCallbacks& callbacks);
 
-    bool PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait = false);
+    uint32_t GetPlaybackGeneration();
+    bool PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait = false,
+                                 std::optional<uint32_t> expected_generation = std::nullopt);
     std::unique_ptr<AudioStreamPacket> PopPacketFromSendQueue();
-    void PlaySound(const std::string_view& sound);
+    void PlaySound(const std::string_view& ogg,
+                   std::optional<uint32_t> expected_generation = std::nullopt);
     bool ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples);
+    void RecordMicrophoneBufferFrame(uint32_t generation, bool discard);
     void ResetDecoder();
     void SetModelsList(srmodel_list_t* models_list);
 
@@ -186,7 +201,13 @@ private:
     static constexpr size_t kAudioTestingPacketCapacity =
         AUDIO_TESTING_MAX_DURATION_MS / OPUS_FRAME_DURATION_MS;
     FixedQueue<std::unique_ptr<AudioStreamPacket>, kAudioTestingPacketCapacity> audio_decode_queue_;
-    FixedQueue<std::unique_ptr<AudioStreamPacket>, MAX_SEND_PACKETS_IN_QUEUE> audio_send_queue_;
+    FixedQueue<std::unique_ptr<AudioStreamPacket>, MAX_BUFFERED_MIC_PACKETS> audio_send_queue_;
+    bool buffering_microphone_ = false;  // Protected by audio_queue_mutex_.
+    enum class MicrophoneBufferState { kWarmingUp, kReady, kCapturing };
+    MicrophoneBufferState microphone_buffer_state_ = MicrophoneBufferState::kWarmingUp;
+    bool draining_microphone_ = false;
+    bool microphone_buffer_overflowed_ = false;
+    uint32_t capture_generation_ = 0;
     FixedQueue<std::unique_ptr<AudioStreamPacket>, kAudioTestingPacketCapacity>
         audio_testing_queue_;
     FixedQueue<AudioTask, MAX_ENCODE_TASKS_IN_QUEUE> audio_encode_queue_;
@@ -207,6 +228,8 @@ private:
 #endif
     std::atomic<bool> service_stopped_{true};
     std::atomic<bool> audio_input_need_warmup_{false};
+    std::atomic<bool> discard_cue_input_{false};
+    std::chrono::steady_clock::time_point cue_tail_until_{};
 
     esp_timer_handle_t audio_power_timer_ = nullptr;
     std::chrono::steady_clock::time_point last_input_time_;

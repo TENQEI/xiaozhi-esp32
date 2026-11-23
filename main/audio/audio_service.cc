@@ -1,6 +1,8 @@
 #include "audio_service.h"
 #include <esp_log.h>
+#include <algorithm>
 #include <cstring>
+#include "board.h"
 
 #define RATE_CVT_CFG(_src_rate, _dest_rate, _channel)                                        \
     (esp_ae_rate_cvt_cfg_t) {                                                                \
@@ -243,6 +245,7 @@ void AudioService::AudioInputTask() {
     constexpr EventBits_t kAudioInputActiveBits = AS_EVENT_AUDIO_TESTING_RUNNING |
                                                   AS_EVENT_WAKE_WORD_RUNNING |
                                                   AS_EVENT_AUDIO_PROCESSOR_RUNNING;
+    uint32_t warmed_capture_generation = 0;
 
     while (true) {
         EventBits_t bits = xEventGroupWaitBits(
@@ -274,6 +277,15 @@ void AudioService::AudioInputTask() {
         }
 
         if (audio_input_need_warmup_.exchange(false)) {
+            {
+                std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+                warmed_capture_generation = capture_generation_;
+            }
+            if (discard_cue_input_.load() && !codec_->input_enabled()) {
+                esp_timer_stop(audio_power_timer_);
+                esp_timer_start_periodic(audio_power_timer_, AUDIO_POWER_CHECK_INTERVAL_MS * 1000);
+                codec_->EnableInput(true);
+            }
             vTaskDelay(pdMS_TO_TICKS(120));
             continue;
         }
@@ -310,8 +322,22 @@ void AudioService::AudioInputTask() {
         if (bits & (AS_EVENT_WAKE_WORD_RUNNING | AS_EVENT_AUDIO_PROCESSOR_RUNNING)) {
             int samples = 160;  // 10ms
             std::vector<int16_t> data;
+            // Snapshot before the read, so a frame straddling the cue tail is discarded.
+            bool discard;
+            bool buffering;
+            uint32_t generation;
+            {
+                std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+                buffering = buffering_microphone_;
+                generation = capture_generation_;
+                discard = discard_cue_input_.load() ||
+                          std::chrono::steady_clock::now() < cue_tail_until_;
+            }
             if (ReadAudioData(data, 16000, samples)) {
-                audio_engine_->Feed(std::move(data));
+                if (!discard)
+                    audio_engine_->Feed(std::move(data));
+                if (buffering && generation == warmed_capture_generation)
+                    RecordMicrophoneBufferFrame(generation, discard);
                 continue;
             }
         }
@@ -350,12 +376,11 @@ void AudioService::AudioOutputTask() {
 
         codec_->OutputData(task.pcm);
 
-        /* Update the last output time */
-        last_output_time_ = std::chrono::steady_clock::now();
         debug_statistics_.playback_count++;
 
         bool notify_drained = false;
         lock.lock();
+        last_output_time_ = std::chrono::steady_clock::now();
 #if CONFIG_USE_SERVER_AEC
         /* Record the timestamp for server AEC */
         if (task.timestamp > 0) {
@@ -440,6 +465,12 @@ void AudioService::OpusCodecTask() {
                         resampled.resize(actual_output);
                         task.pcm = std::move(resampled);
                     }
+                    if (packet->playback_gain != 1.0f) {
+                        for (auto& sample : task.pcm) {
+                            sample = static_cast<int16_t>(
+                                std::clamp(sample * packet->playback_gain, -32768.0f, 32767.0f));
+                        }
+                    }
                     decoded = true;
                 } else {
                     ESP_LOGE(TAG, "Failed to decode audio after resize, error code: %d", ret);
@@ -494,10 +525,21 @@ void AudioService::OpusCodecTask() {
                             std::lock_guard<std::mutex> lock2(audio_queue_mutex_);
                             /* Never let a full send queue stall encoding: stale realtime
                              * audio is useless to the server, so drop the oldest packet. */
-                            if (audio_send_queue_.size() >= MAX_SEND_PACKETS_IN_QUEUE) {
-                                audio_send_queue_.pop_front();
+                            if (task.capture_generation != capture_generation_) {
+                                // A cancelled connection must not leak an in-flight frame.
+                            } else if (buffering_microphone_ || draining_microphone_) {
+                                // Keep the start of the utterance if connection is slow.
+                                if (!audio_send_queue_.full()) {
+                                    audio_send_queue_.push_back(std::move(packet));
+                                } else {
+                                    microphone_buffer_overflowed_ = true;
+                                }
+                            } else {
+                                if (audio_send_queue_.size() >= MAX_SEND_PACKETS_IN_QUEUE) {
+                                    audio_send_queue_.pop_front();
+                                }
+                                audio_send_queue_.push_back(std::move(packet));
                             }
-                            audio_send_queue_.push_back(std::move(packet));
                         }
                         if (callbacks_.on_send_queue_available) {
                             callbacks_.on_send_queue_available();
@@ -576,6 +618,10 @@ void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t
         /* Push the task to the encode queue */
         std::unique_lock<std::mutex> lock(audio_queue_mutex_);
 
+        task.capture_generation = capture_generation_;
+        if (type == kAudioTaskTypeEncodeToSendQueue && !IsAudioProcessorRunning())
+            return;
+
         /* If the task is to send queue, we need to set the timestamp */
         if (type == kAudioTaskTypeEncodeToSendQueue && !timestamp_queue_.empty()) {
             task.timestamp = timestamp_queue_.front();
@@ -606,9 +652,17 @@ void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t
     }
 }
 
-bool AudioService::PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait) {
+uint32_t AudioService::GetPlaybackGeneration() {
+    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    return playback_generation_;
+}
+
+bool AudioService::PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait,
+                                           std::optional<uint32_t> expected_generation) {
     std::unique_lock<std::mutex> lock(audio_queue_mutex_);
-    const uint32_t generation = playback_generation_;
+    const uint32_t generation = expected_generation.value_or(playback_generation_);
+    if (generation != playback_generation_)
+        return false;
     if (audio_decode_queue_.size() >= MAX_DECODE_PACKETS_IN_QUEUE) {
         if (wait) {
             audio_queue_cv_.wait(lock, [this, generation]() {
@@ -630,11 +684,14 @@ bool AudioService::PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> pa
 
 std::unique_ptr<AudioStreamPacket> AudioService::PopPacketFromSendQueue() {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
-    if (audio_send_queue_.empty()) {
+    if (buffering_microphone_ || audio_send_queue_.empty()) {
         return nullptr;
     }
     auto packet = std::move(audio_send_queue_.front());
     audio_send_queue_.pop_front();
+    if (audio_send_queue_.empty()) {
+        draining_microphone_ = false;
+    }
     audio_queue_cv_.notify_all();
     return packet;
 }
@@ -663,6 +720,7 @@ std::unique_ptr<AudioStreamPacket> AudioService::PopWakeWordPacket() {
 }
 
 void AudioService::EnableWakeWordDetection(bool enable) {
+    enable = enable && Board::GetInstance().UsesWakeWord();
     ESP_LOGD(TAG, "%s wake word detection", enable ? "Enabling" : "Disabling");
     if (enable) {
         if (!InitializeAudioEngine()) {
@@ -693,6 +751,8 @@ void AudioService::EnableWakeWordDetection(bool enable) {
             audio_engine_->EnableWakeWordDetection(false);
         }
         xEventGroupClearBits(event_group_, AS_EVENT_WAKE_WORD_RUNNING);
+        if (!Board::GetInstance().UsesWakeWord())
+            xEventGroupSetBits(event_group_, AS_EVENT_AUDIO_INPUT_STOP_REQUEST);
     }
 }
 
@@ -732,6 +792,102 @@ void AudioService::EnableVoiceProcessing(bool enable) {
             audio_engine_->EnableVoiceProcessing(false);
         }
         xEventGroupClearBits(event_group_, AS_EVENT_AUDIO_PROCESSOR_RUNNING);
+        if (!Board::GetInstance().UsesWakeWord()) {
+            xEventGroupSetBits(event_group_, AS_EVENT_AUDIO_INPUT_STOP_REQUEST);
+        }
+    }
+}
+
+bool AudioService::PrepareForSleep() {
+    // Input is stopped by its owning task. Never stop a live I2S read here.
+    if (IsAudioProcessorRunning() || IsWakeWordRunning() || codec_->input_enabled())
+        return false;
+    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    if (!IsPlaybackDrainedLocked() || !audio_encode_queue_.empty())
+        return false;
+    // i2s_channel_write returns after enqueueing DMA, before the last sample plays.
+    if (std::chrono::steady_clock::now() - last_output_time_ < std::chrono::milliseconds(100))
+        return false;
+    codec_->EnableOutput(false);
+    esp_timer_stop(audio_power_timer_);
+    return true;
+}
+
+bool AudioService::MicrophoneBufferOverflowed() {
+    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    return microphone_buffer_overflowed_;
+}
+
+void AudioService::ReleaseMicrophoneAfterCue() {
+    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    const auto dma_us = 1000000LL * AUDIO_CODEC_DMA_DESC_NUM * AUDIO_CODEC_DMA_FRAME_NUM /
+                        codec_->output_sample_rate();
+    cue_tail_until_ = last_output_time_ + std::chrono::microseconds(dma_us);
+    discard_cue_input_ = false;
+}
+
+bool AudioService::IsMicrophoneBufferReady() {
+    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    return buffering_microphone_ && microphone_buffer_state_ >= MicrophoneBufferState::kReady;
+}
+
+bool AudioService::IsMicrophoneBufferCapturing() {
+    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    return buffering_microphone_ && microphone_buffer_state_ == MicrophoneBufferState::kCapturing;
+}
+
+void AudioService::RecordMicrophoneBufferFrame(uint32_t generation, bool discard) {
+    {
+        std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+        const auto state = discard ? MicrophoneBufferState::kReady : MicrophoneBufferState::kCapturing;
+        if (!buffering_microphone_ || generation != capture_generation_ ||
+            state <= microphone_buffer_state_)
+            return;
+        microphone_buffer_state_ = state;
+    }
+    if (callbacks_.on_microphone_buffer_progress)
+        callbacks_.on_microphone_buffer_progress();
+}
+
+bool AudioService::BeginMicrophoneBuffer(bool cue_playing) {
+    {
+        std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+        ++capture_generation_;
+        audio_encode_queue_.clear();
+        audio_send_queue_.clear();
+        microphone_buffer_overflowed_ = false;
+        discard_cue_input_ = cue_playing;
+        cue_tail_until_ = {};
+        microphone_buffer_state_ = MicrophoneBufferState::kWarmingUp;
+        buffering_microphone_ = true;
+        draining_microphone_ = false;
+    }
+    EnableVoiceProcessing(true);
+    if (IsAudioProcessorRunning()) {
+        return true;
+    }
+    EndMicrophoneBuffer(false);
+    return false;
+}
+
+void AudioService::EndMicrophoneBuffer(bool send) {
+    {
+        std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+        if (!buffering_microphone_) {
+            return;
+        }
+        buffering_microphone_ = false;
+        draining_microphone_ = send && !audio_send_queue_.empty();
+        if (!send) {
+            discard_cue_input_ = false;
+            cue_tail_until_ = {};
+            ++capture_generation_;
+            audio_encode_queue_.clear();
+            audio_send_queue_.clear();
+        }
+    }
+    if (send && callbacks_.on_send_queue_available) {
+        callbacks_.on_send_queue_available();
     }
 }
 
@@ -765,7 +921,8 @@ void AudioService::EnableDeviceAec(bool enable) {
 
 void AudioService::SetCallbacks(AudioServiceCallbacks& callbacks) { callbacks_ = callbacks; }
 
-void AudioService::PlaySound(const std::string_view& ogg) {
+void AudioService::PlaySound(const std::string_view& ogg,
+                             std::optional<uint32_t> expected_generation) {
     if (!codec_->output_enabled()) {
         esp_timer_stop(audio_power_timer_);
         esp_timer_start_periodic(audio_power_timer_, AUDIO_POWER_CHECK_INTERVAL_MS * 1000);
@@ -776,15 +933,16 @@ void AudioService::PlaySound(const std::string_view& ogg) {
     size_t size = ogg.size();
 
     auto demuxer = std::make_unique<OggDemuxer>();
-    demuxer->OnPacket(
-        [this](const uint8_t* data, int sample_rate, int frame_duration_ms, size_t size) {
-            auto packet = std::make_unique<AudioStreamPacket>();
-            packet->sample_rate = sample_rate;
-            packet->frame_duration = frame_duration_ms;
-            packet->payload.resize(size);
-            std::memcpy(packet->payload.data(), data, size);
-            PushPacketToDecodeQueue(std::move(packet), true);
-        });
+    const auto generation = expected_generation.value_or(GetPlaybackGeneration());
+    demuxer->OnPacket([this, generation](const uint8_t* data, int sample_rate,
+                                         int frame_duration_ms, size_t size) {
+        auto packet = std::make_unique<AudioStreamPacket>();
+        packet->sample_rate = sample_rate;
+        packet->frame_duration = frame_duration_ms;
+        packet->payload.resize(size);
+        std::memcpy(packet->payload.data(), data, size);
+        PushPacketToDecodeQueue(std::move(packet), true, generation);
+    });
     demuxer->Reset();
     demuxer->Process(buf, size);
 }
@@ -838,8 +996,12 @@ void AudioService::CheckAndUpdateAudioPowerState() {
     auto now = std::chrono::steady_clock::now();
     auto input_elapsed =
         std::chrono::duration_cast<std::chrono::milliseconds>(now - last_input_time_).count();
-    auto output_elapsed =
-        std::chrono::duration_cast<std::chrono::milliseconds>(now - last_output_time_).count();
+    int64_t output_elapsed;
+    {
+        std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+        output_elapsed =
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - last_output_time_).count();
+    }
     if (input_elapsed > AUDIO_POWER_TIMEOUT_MS && codec_->input_enabled()) {
         // ADC continuous start/stop must run in the same task. Wake the audio
         // input task instead of closing the codec from the esp_timer task.

@@ -79,7 +79,7 @@ void Protocol::SendWakeWordDetected(const std::string& wake_word) {
     SendText(json);
 }
 
-void Protocol::SendStartListening(ListeningMode mode) {
+bool Protocol::SendStartListening(ListeningMode mode) {
     std::string message = "{\"session_id\":\"" + session_id_ + "\"";
     message += ",\"type\":\"listen\",\"state\":\"start\"";
     if (mode == kListeningModeRealtime) {
@@ -90,7 +90,7 @@ void Protocol::SendStartListening(ListeningMode mode) {
         message += ",\"mode\":\"manual\"";
     }
     message += "}";
-    SendText(message);
+    return SendText(message);
 }
 
 void Protocol::SendStopListening() {
@@ -105,13 +105,22 @@ void Protocol::SendMcpMessage(const std::string& payload) {
     SendText(message);
 }
 
+namespace {
+uint32_t MonotonicSeconds() {
+    return static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                                     std::chrono::steady_clock::now().time_since_epoch())
+                                     .count());
+}
+}  // namespace
+
+void Protocol::MarkIncoming() { last_incoming_seconds_.store(MonotonicSeconds()); }
+
 bool Protocol::IsTimeout() const {
-    const int kTimeoutSeconds = 120;
-    auto now = std::chrono::steady_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::seconds>(now - last_incoming_time_);
-    bool timeout = duration.count() > kTimeoutSeconds;
+    const auto last = last_incoming_seconds_.load();
+    const auto duration = MonotonicSeconds() - last;
+    bool timeout = duration > 120;
     if (timeout) {
-        ESP_LOGE(TAG, "Channel timeout %ld seconds", (long)duration.count());
+        ESP_LOGE(TAG, "Channel timeout %ld seconds", static_cast<long>(duration));
     }
     return timeout;
 }

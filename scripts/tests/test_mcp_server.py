@@ -127,6 +127,11 @@ class McpServerTest(unittest.TestCase):
                     [](const PropertyList& args) -> ToolResult {
                         return std::unexpected(args["message"].value<std::string>());
                     });
+                server.AddTool("test.seconds", "Whole seconds",
+                    PropertyList({Property("seconds", kPropertyTypeInteger, 1, 3600)}),
+                    [](const PropertyList& args) -> ToolResult {
+                        return ReturnValue(args["seconds"].value<int>());
+                    });
                 McpServer::ResponseSender sender;
                 if (argc > 1) {
                     sender = [](const std::string& payload) {
@@ -218,6 +223,14 @@ class McpServerTest(unittest.TestCase):
         method, tool = self.responses(requests)
         self.assert_error(method, 0, -32601, "Method not implemented: " + name)
         self.assert_error(tool, -1, -32602, "Unknown tool: " + name)
+
+    def test_seconds_reject_non_integer_numbers(self):
+        for value in (0.9, 30.5, 3599.9, 1e40):
+            with self.subTest(value=value):
+                response, = self.responses([self.call(1, "test.seconds", {"seconds": value})])
+                self.assert_error(response, 1, -32602, "Invalid type for argument: seconds")
+        response, = self.responses([self.call(2, "test.seconds", {"seconds": 3600})])
+        self.assertEqual(response["result"]["content"][0]["text"], "3600")
 
     def test_missing_argument_keeps_error_code(self):
         response, = self.responses([self.call(7, "self.set_press_to_talk", {})])
