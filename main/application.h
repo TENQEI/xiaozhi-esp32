@@ -38,6 +38,7 @@
 #define MAIN_EVENT_STATE_CHANGED        (1 << 12)
 #define MAIN_EVENT_PLAYBACK_DRAINED     (1 << 13)
 #define MAIN_EVENT_STARTUP_HINT_TIMEOUT (1 << 14)
+#define MAIN_EVENT_MIC_BUFFER_PROGRESS  (1 << 15)
 
 enum AecMode {
     kAecOff,
@@ -97,7 +98,8 @@ public:
      */
     void ToggleChatState();
     // Application-task only: capture the button-triggered utterance while connecting.
-    bool BeginBufferedConversation();
+    bool BeginBufferedConversation(std::function<void()> start_network = {});
+    void StartBufferedConversationCue();
     bool PrepareForNetworkSleep();
     void ConnectBufferedConversation();
     void CancelBufferedConversation();
@@ -105,9 +107,6 @@ public:
     void CloseAfterCurrentReply();
     bool IsConnectionOpening() const { return buffered_open_in_progress_; }
     bool HasBufferedConversation() const { return buffered_conversation_; }
-    bool IsBufferedConversationCuePending() const {
-        return buffered_conversation_ && session_sound_pending_;
-    }
 
     /**
      * Start listening (event-based, thread-safe)
@@ -189,8 +188,10 @@ private:
     std::atomic<bool> buffered_open_in_progress_{false};
     void FinishBufferedConnection(std::shared_ptr<Protocol> protocol, bool connected);
     bool buffered_conversation_ = false;
+    bool buffered_cue_started_ = false;
     bool buffered_connection_ready_ = false;
     bool buffered_connection_failed_ = false;
+    bool trace_first_buffered_audio_ = false;
     void CompleteBufferedStart();
     int clock_ticks_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;

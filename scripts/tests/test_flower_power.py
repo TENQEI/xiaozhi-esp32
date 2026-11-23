@@ -108,19 +108,30 @@ struct Timer {std::function<void()> callback; int64_t delay=0;};
 using esp_timer_handle_t=Timer*;
 struct esp_timer_create_args_t {void(*callback)(void*)=nullptr;void* arg=nullptr;const char* name=nullptr;};
 inline Timer* usb_timer=nullptr;inline Timer* trace_timer=nullptr;inline Timer* countdown_timer=nullptr;
-inline Timer* cue_tail_timer=nullptr;
+inline Timer* cue_timer=nullptr;
 int esp_timer_create(esp_timer_create_args_t* t,Timer** out){
  auto callback=t->callback;auto arg=t->arg;*out=new Timer{[=]{callback(arg);},0};
  if(std::string_view(t->name)=="flower_usb")usb_timer=*out;
  if(std::string_view(t->name)=="flower_trace")trace_timer=*out;
  if(std::string_view(t->name)=="flower_countdown")countdown_timer=*out;
- if(std::string_view(t->name)=="flower_cue_tail")cue_tail_timer=*out;
+ if(std::string_view(t->name)=="flower_cue")cue_timer=*out;
  return 0;
 }
 int esp_timer_stop(Timer* t){if(t)t->delay=0;return 0;}
 int esp_timer_start_once(Timer* t,int64_t delay){assert(!t->delay);t->delay=delay;return 0;}
 bool esp_timer_is_active(Timer* t){return t->delay!=0;}
 void fire(Timer* t){assert(t->delay);t->delay=0;t->callback();}
+using esp_event_base_t=const char*;
+using esp_event_handler_instance_t=void*;
+constexpr auto WIFI_EVENT="WIFI_EVENT";
+constexpr int ESP_EVENT_ANY_ID=-1,WIFI_EVENT_STA_CONNECTED=4,WIFI_EVENT_STA_DISCONNECTED=5,WIFI_EVENT_STA_STOP=3;
+inline std::function<void(int32_t)> link_event;
+int esp_event_handler_instance_register(esp_event_base_t base,int32_t id,
+ void(*callback)(void*,esp_event_base_t,int32_t,void*),void* context,void** handler){
+ assert(id==ESP_EVENT_ANY_ID && !link_event);
+ link_event=[=](int32_t event){callback(context,base,event,nullptr);};
+ *handler=context;return 0;
+}
 struct esp_pm_config_t {int max_freq_mhz=0,min_freq_mhz=0;bool light_sleep_enable=false;};
 inline bool sleeping=false;
 int esp_pm_configure(esp_pm_config_t* c){sleeping=c->light_sleep_enable;return 0;}
@@ -162,11 +173,12 @@ struct WifiManager {bool connected=true,config=false;int starts=0,stops=0;
  void StopStation(){++stops;connected=false;}};
 enum DeviceState {kDeviceStateStarting,kDeviceStateIdle,kDeviceStateConnecting,kDeviceStateListening,kDeviceStateSpeaking,kDeviceStateNotifying};
 struct AudioService {
- bool idle=true;int64_t cue_tail_until=0;
+ bool idle=true,ready=false;
  bool IsPlaybackIdle(){return idle;}
- int64_t MicrophoneCueTailRemainingUs(){return std::max<int64_t>(0,cue_tail_until-monotonic);}
+ bool IsMicrophoneBufferReady(){return ready;}
 };
-struct Application {DeviceState state=kDeviceStateIdle;bool buffered=false,opening=false,cue=false;int toggles=0,captures=0;
+struct Application {DeviceState state=kDeviceStateIdle;bool buffered=false,opening=false,cue=false;
+ int toggles=0,captures=0,connections=0,cues=0;
  AudioService audio;std::vector<std::function<void()>> tasks;
  bool priority=false,ring_clip_busy=false;std::vector<std::string_view> clips;
  bool IsPriorityPlayback(){return priority;}
@@ -183,15 +195,16 @@ struct Application {DeviceState state=kDeviceStateIdle;bool buffered=false,openi
  void Drain(){auto t=std::move(tasks);tasks.clear();for(auto& f:t)f();}
  DeviceState GetDeviceState(){return state;}
  void ToggleChatState(){++toggles;state=kDeviceStateListening;}
- bool BeginBufferedConversation(){
+ bool BeginBufferedConversation(std::function<void()> start_network){
   if(!audio.idle)return false;
-  buffered=true;cue=true;audio.cue_tail_until=0;++captures;state=kDeviceStateConnecting;return true;
+  start_network();
+  buffered=true;cue=false;audio.ready=false;++captures;state=kDeviceStateConnecting;return true;
  }
- void CompleteCue(int64_t tail){cue=false;audio.cue_tail_until=monotonic+tail;}
- void ConnectBufferedConversation(){buffered=false;state=kDeviceStateListening;}
+ void StartBufferedConversationCue(){assert(buffered && audio.ready && !cue);cue=true;++cues;}
+ void ConnectBufferedConversation(){assert(buffered);++connections;}
+ void FinishConversationStart(){assert(cue);cue=false;buffered=false;state=kDeviceStateListening;}
  void CancelBufferedConversation(){buffered=false;cue=false;state=kDeviceStateIdle;}
  bool HasBufferedConversation(){return buffered;}
- bool IsBufferedConversationCuePending(){return buffered&&cue;}
  bool IsConnectionOpening(){return opening;}
  AudioService& GetAudioService(){return audio;}
  bool CanEnterSleepMode(){return state==kDeviceStateIdle && audio.idle;}
@@ -251,16 +264,16 @@ int main(){
  a.state=kDeviceStateIdle;b->OnApplicationEvent();assert(sleeping);
  assert(pm_callbacks.exit_cb(1000000,pm_callbacks.exit_cb_user_arg)==ESP_OK);
  Button::click[1]();a.Drain();b->OnApplicationEvent();
- assert(!sleeping && a.buffered && a.cue && w.starts==0 && a.captures==1);
+ assert(!sleeping && a.buffered && !a.cue && w.starts==1 && a.captures==1);
  assert(usb_disconnected && usb_timer->delay==100000 && no_sleep_count==1);
  fire(usb_timer);a.Drain();
  assert(!usb_disconnected && no_sleep_count==0 && trace_timer->delay==800000);
- monotonic+=1000000;b->OnApplicationEvent();assert(w.starts==0);
- a.CompleteCue(60000);b->OnApplicationEvent();assert(cue_tail_timer->delay==60000 && w.starts==0);
- monotonic+=59999;b->OnApplicationEvent();assert(w.starts==0);
- ++monotonic;fire(cue_tail_timer);a.Drain();b->OnApplicationEvent();
- assert(w.starts==1 && a.buffered);
- w.connected=true;b->OnApplicationEvent();assert(a.state==kDeviceStateListening);
+ a.audio.ready=true;b->OnApplicationEvent();assert(!a.cue && a.connections==0);
+ link_event(WIFI_EVENT_STA_CONNECTED);a.Drain();b->OnApplicationEvent();
+ assert(a.cue && a.cues==1 && !cue_timer->delay && !w.connected && a.connections==0);
+ w.connected=true;b->OnApplicationEvent();assert(a.connections==1 && a.buffered);
+ b->OnApplicationEvent();assert(a.cues==1 && a.connections==1);
+ a.FinishConversationStart();b->OnApplicationEvent();
  monotonic+=999000000;b->OnApplicationEvent();assert(!sleeping && w.stops==1);
  a.state=kDeviceStateIdle;b->OnApplicationEvent();
  monotonic+=299000000;b->OnApplicationEvent();assert(w.connected);
@@ -271,14 +284,20 @@ int main(){
  Button::click[1]();a.Drain();b->OnApplicationEvent();assert(a.buffered && usb_disconnected);
  fire(usb_timer);a.Drain();assert(!usb_disconnected && trace_timer->delay==800000);
  fire(trace_timer);a.Drain();
- monotonic+=1000000;a.CompleteCue(0);b->OnApplicationEvent();assert(w.starts==2);
  monotonic+=7999999;b->OnApplicationEvent();assert(a.buffered);
  ++monotonic;b->OnApplicationEvent();assert(!a.buffered && sleeping);
- Button::click[1]();a.Drain();b->OnApplicationEvent();assert(a.buffered);
- a.CompleteCue(60000);b->OnApplicationEvent();assert(cue_tail_timer->delay==60000);
- monotonic+=60000;fire(cue_tail_timer);
+ Button::click[1]();a.Drain();b->OnApplicationEvent();assert(a.buffered && w.starts==3);
+ link_event(WIFI_EVENT_STA_CONNECTED);a.Drain();b->OnApplicationEvent();assert(!a.cue);
+ link_event(WIFI_EVENT_STA_DISCONNECTED);a.Drain();b->OnApplicationEvent();
+ a.audio.ready=true;b->OnApplicationEvent();assert(!a.cue);
+ Button::click[1]();link_event(WIFI_EVENT_STA_CONNECTED);
+ a.Drain();b->OnApplicationEvent();assert(!a.buffered && sleeping && a.cues==1 && w.starts==3);
+ Button::click[1]();a.Drain();b->OnApplicationEvent();assert(a.buffered && w.starts==4);
+ link_event(WIFI_EVENT_STA_CONNECTED);a.Drain();b->OnApplicationEvent();assert(!a.cue);
+ w.connected=true;b->OnApplicationEvent();assert(!a.cue && a.connections==2);
+ a.audio.ready=true;b->OnApplicationEvent();assert(a.cue && a.cues==2 && !cue_timer->delay);
  Button::click[1]();a.Drain();b->OnApplicationEvent();
- assert(!a.buffered && sleeping && w.starts==2);
+ assert(!a.buffered && sleeping);
  // A queued single click waiting for playback must not run again after cancellation.
  a.audio.idle=false;Button::click[1]();a.Drain();assert(!a.buffered);
  a.audio.idle=true;b->OnApplicationEvent();assert(a.buffered);
@@ -311,7 +330,8 @@ int main(){
             (root / "fake.h").write_text(fake)
             for name in ("announcement_mcp_tools.h", "application.h", "button.h", "codecs/no_audio_codec.h",
                          "config.h", "hourly_chime.h", "led/gpio_led.h", "wifi_board.h",
-                         "assets/lang_config.h", "wifi_manager.h", "esp_pm.h", "esp_log.h", "sdkconfig.h", "hal/usb_serial_jtag_ll.h"):
+                         "assets/lang_config.h", "wifi_manager.h", "esp_pm.h", "esp_log.h", "esp_event.h",
+                         "esp_wifi.h", "sdkconfig.h", "hal/usb_serial_jtag_ll.h"):
                 p = root / name
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_text('#include "fake.h"\n')

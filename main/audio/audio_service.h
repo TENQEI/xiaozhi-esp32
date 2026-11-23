@@ -83,6 +83,7 @@
 
 struct AudioServiceCallbacks {
     std::function<void(void)> on_send_queue_available;
+    std::function<void()> on_microphone_buffer_progress;
     std::function<void(const std::string&)> on_wake_word_detected;
     std::function<void(bool)> on_vad_change;
     std::function<void(void)> on_audio_testing_queue_full;
@@ -141,8 +142,9 @@ public:
     void ReleaseWakeWordResources();
     void EnableVoiceProcessing(bool enable);
     bool BeginMicrophoneBuffer(bool cue_playing = false);
+    bool IsMicrophoneBufferReady();
+    bool IsMicrophoneBufferCapturing();
     void ReleaseMicrophoneAfterCue();
-    int64_t MicrophoneCueTailRemainingUs();
     bool MicrophoneBufferOverflowed();
     bool PrepareForSleep();
     void EndMicrophoneBuffer(bool send);
@@ -158,6 +160,7 @@ public:
     void PlaySound(const std::string_view& ogg,
                    std::optional<uint32_t> expected_generation = std::nullopt);
     bool ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples);
+    void RecordMicrophoneBufferFrame(uint32_t generation, bool discard);
     void ResetDecoder();
     void SetModelsList(srmodel_list_t* models_list);
 
@@ -200,6 +203,8 @@ private:
     FixedQueue<std::unique_ptr<AudioStreamPacket>, kAudioTestingPacketCapacity> audio_decode_queue_;
     FixedQueue<std::unique_ptr<AudioStreamPacket>, MAX_BUFFERED_MIC_PACKETS> audio_send_queue_;
     bool buffering_microphone_ = false;  // Protected by audio_queue_mutex_.
+    enum class MicrophoneBufferState { kWarmingUp, kReady, kCapturing };
+    MicrophoneBufferState microphone_buffer_state_ = MicrophoneBufferState::kWarmingUp;
     bool draining_microphone_ = false;
     bool microphone_buffer_overflowed_ = false;
     uint32_t capture_generation_ = 0;

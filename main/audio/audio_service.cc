@@ -245,6 +245,7 @@ void AudioService::AudioInputTask() {
     constexpr EventBits_t kAudioInputActiveBits = AS_EVENT_AUDIO_TESTING_RUNNING |
                                                   AS_EVENT_WAKE_WORD_RUNNING |
                                                   AS_EVENT_AUDIO_PROCESSOR_RUNNING;
+    uint32_t warmed_capture_generation = 0;
 
     while (true) {
         EventBits_t bits = xEventGroupWaitBits(
@@ -276,6 +277,10 @@ void AudioService::AudioInputTask() {
         }
 
         if (audio_input_need_warmup_.exchange(false)) {
+            {
+                std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+                warmed_capture_generation = capture_generation_;
+            }
             if (discard_cue_input_.load() && !codec_->input_enabled()) {
                 esp_timer_stop(audio_power_timer_);
                 esp_timer_start_periodic(audio_power_timer_, AUDIO_POWER_CHECK_INTERVAL_MS * 1000);
@@ -318,14 +323,21 @@ void AudioService::AudioInputTask() {
             int samples = 160;  // 10ms
             std::vector<int16_t> data;
             // Snapshot before the read, so a frame straddling the cue tail is discarded.
-            bool discard = discard_cue_input_.load();
+            bool discard;
+            bool buffering;
+            uint32_t generation;
             {
                 std::lock_guard<std::mutex> lock(audio_queue_mutex_);
-                discard = discard || std::chrono::steady_clock::now() < cue_tail_until_;
+                buffering = buffering_microphone_;
+                generation = capture_generation_;
+                discard = discard_cue_input_.load() ||
+                          std::chrono::steady_clock::now() < cue_tail_until_;
             }
             if (ReadAudioData(data, 16000, samples)) {
                 if (!discard)
                     audio_engine_->Feed(std::move(data));
+                if (buffering && generation == warmed_capture_generation)
+                    RecordMicrophoneBufferFrame(generation, discard);
                 continue;
             }
         }
@@ -814,10 +826,27 @@ void AudioService::ReleaseMicrophoneAfterCue() {
     discard_cue_input_ = false;
 }
 
-int64_t AudioService::MicrophoneCueTailRemainingUs() {
+bool AudioService::IsMicrophoneBufferReady() {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
-    const auto remaining = cue_tail_until_ - std::chrono::steady_clock::now();
-    return std::max<int64_t>(0, std::chrono::ceil<std::chrono::microseconds>(remaining).count());
+    return buffering_microphone_ && microphone_buffer_state_ >= MicrophoneBufferState::kReady;
+}
+
+bool AudioService::IsMicrophoneBufferCapturing() {
+    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    return buffering_microphone_ && microphone_buffer_state_ == MicrophoneBufferState::kCapturing;
+}
+
+void AudioService::RecordMicrophoneBufferFrame(uint32_t generation, bool discard) {
+    {
+        std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+        const auto state = discard ? MicrophoneBufferState::kReady : MicrophoneBufferState::kCapturing;
+        if (!buffering_microphone_ || generation != capture_generation_ ||
+            state <= microphone_buffer_state_)
+            return;
+        microphone_buffer_state_ = state;
+    }
+    if (callbacks_.on_microphone_buffer_progress)
+        callbacks_.on_microphone_buffer_progress();
 }
 
 bool AudioService::BeginMicrophoneBuffer(bool cue_playing) {
@@ -829,6 +858,7 @@ bool AudioService::BeginMicrophoneBuffer(bool cue_playing) {
         microphone_buffer_overflowed_ = false;
         discard_cue_input_ = cue_playing;
         cue_tail_until_ = {};
+        microphone_buffer_state_ = MicrophoneBufferState::kWarmingUp;
         buffering_microphone_ = true;
         draining_microphone_ = false;
     }

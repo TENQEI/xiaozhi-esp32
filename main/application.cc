@@ -85,6 +85,9 @@ void Application::Initialize() {
     callbacks.on_send_queue_available = [this]() {
         xEventGroupSetBits(event_group_, MAIN_EVENT_SEND_AUDIO);
     };
+    callbacks.on_microphone_buffer_progress = [this]() {
+        xEventGroupSetBits(event_group_, MAIN_EVENT_MIC_BUFFER_PROGRESS);
+    };
     callbacks.on_wake_word_detected = [this](const std::string& wake_word) {
         xEventGroupSetBits(event_group_, MAIN_EVENT_WAKE_WORD_DETECTED);
     };
@@ -193,7 +196,8 @@ void Application::Run() {
         MAIN_EVENT_VAD_CHANGE | MAIN_EVENT_CLOCK_TICK | MAIN_EVENT_ERROR |
         MAIN_EVENT_NETWORK_CONNECTED | MAIN_EVENT_NETWORK_DISCONNECTED | MAIN_EVENT_TOGGLE_CHAT |
         MAIN_EVENT_START_LISTENING | MAIN_EVENT_STOP_LISTENING | MAIN_EVENT_ACTIVATION_DONE |
-        MAIN_EVENT_STATE_CHANGED | MAIN_EVENT_PLAYBACK_DRAINED | MAIN_EVENT_STARTUP_HINT_TIMEOUT;
+        MAIN_EVENT_STATE_CHANGED | MAIN_EVENT_PLAYBACK_DRAINED | MAIN_EVENT_STARTUP_HINT_TIMEOUT |
+        MAIN_EVENT_MIC_BUFFER_PROGRESS;
 
     while (true) {
         auto bits = xEventGroupWaitBits(event_group_, ALL_EVENTS, pdTRUE, pdFALSE, portMAX_DELAY);
@@ -255,7 +259,15 @@ void Application::Run() {
 
         if (bits & MAIN_EVENT_SEND_AUDIO) {
             while (auto packet = audio_service_.PopPacketFromSendQueue()) {
-                if (protocol_ && !protocol_->SendAudio(std::move(packet))) {
+                if (!protocol_)
+                    continue;
+                const bool sent = protocol_->SendAudio(std::move(packet));
+                if (trace_first_buffered_audio_) {
+                    Board::GetInstance().TraceWakeEvent(sent ? "first microphone packet sent"
+                                                           : "first microphone packet send failed");
+                    trace_first_buffered_audio_ = false;
+                }
+                if (!sent) {
                     // Drop the remaining packets. Leaving them in the queue would
                     // stall the Opus codec task (it waits for queue space), which in
                     // turn deadlocks the whole audio input pipeline, as no new
@@ -265,6 +277,12 @@ void Application::Run() {
                     break;
                 }
             }
+        }
+
+        if (bits & MAIN_EVENT_MIC_BUFFER_PROGRESS) {
+            if (audio_service_.IsMicrophoneBufferCapturing())
+                Board::GetInstance().TraceWakeEvent("first post-cue microphone frame");
+            CompleteBufferedStart();
         }
 
         if (bits & MAIN_EVENT_WAKE_WORD_DETECTED) {
@@ -850,7 +868,7 @@ bool Application::PrepareForNetworkSleep() {
     return true;
 }
 
-bool Application::BeginBufferedConversation() {
+bool Application::BeginBufferedConversation(std::function<void()> start_network) {
     if (GetDeviceState() == kDeviceStateNotifying)
         StopNotification();
     if (buffered_open_in_progress_ || buffered_conversation_ ||
@@ -858,19 +876,29 @@ bool Application::BeginBufferedConversation() {
         return false;
     }
     DismissAlert();
+    buffered_cue_started_ = false;
     buffered_connection_ready_ = false;
     buffered_connection_failed_ = false;
+    trace_first_buffered_audio_ = false;
+    if (start_network)
+        start_network();
+    Board::GetInstance().TraceWakeEvent("microphone warmup start");
     buffered_conversation_ = audio_service_.BeginMicrophoneBuffer(true);
-    if (buffered_conversation_) {
+    if (buffered_conversation_)
         SetDeviceState(kDeviceStateConnecting);
-        Board::GetInstance().TraceWakeEvent("start cue / microphone warmup");
-        BeginConversation(GetDefaultListeningMode(), [this]() {
-            audio_service_.ReleaseMicrophoneAfterCue();
-            Board::GetInstance().TraceWakeEvent("cue complete");
-            CompleteBufferedStart();
-        });
-    }
     return buffered_conversation_;
+}
+
+void Application::StartBufferedConversationCue() {
+    if (!buffered_conversation_ || buffered_cue_started_ ||
+        GetDeviceState() != kDeviceStateConnecting || !audio_service_.IsMicrophoneBufferReady())
+        return;
+    buffered_cue_started_ = true;
+    BeginConversation(GetDefaultListeningMode(), [this]() {
+        audio_service_.ReleaseMicrophoneAfterCue();
+        Board::GetInstance().TraceWakeEvent("cue complete / speaker tail");
+        CompleteBufferedStart();
+    });
 }
 
 void Application::ConnectBufferedConversation() {
@@ -937,6 +965,10 @@ void Application::CompleteBufferedStart() {
             PlaySound(Lang::Sounds::OGG_EXCLAMATION);
         return;
     }
+    // The audio task only enters capture after reading a frame past the cue's DMA tail.
+    if (!buffered_cue_started_ || !audio_service_.IsMicrophoneBufferCapturing() ||
+        GetDeviceState() != kDeviceStateConnecting)
+        return;
     play_popup_on_listening_ = true;  // Send listen-start before releasing buffered packets.
     suppress_next_popup_ = true;      // The user is already speaking.
     SetListeningMode(GetDefaultListeningMode());
@@ -947,6 +979,7 @@ void Application::CancelBufferedConversation() {
         return;
     }
     buffered_conversation_ = false;
+    buffered_cue_started_ = false;
     const bool close = buffered_connection_ready_ && !buffered_open_in_progress_;
     buffered_connection_ready_ = false;
     buffered_connection_failed_ = false;
@@ -1251,6 +1284,8 @@ void Application::BeginConversation(ListeningMode mode, std::function<void()> re
         });
     };
     if (notify_player_.StartLocal(std::string(sound), id, std::move(finished))) {
+        if (buffered_conversation_)
+            board.TraceWakeEvent("cue start");
         board.OnSessionSoundStarted(true);
     } else {
         session_sound_pending_ = false;
@@ -1314,6 +1349,7 @@ void Application::ClearReplyPlayback() {
 
 void Application::CancelConversation() {
     CancelBufferedConversation();
+    trace_first_buffered_audio_ = false;
     session_.Cancel();
     CancelSessionSound();
     ClearReplyPlayback();
@@ -1386,6 +1422,7 @@ void Application::HandleStateChangedEvent() {
     switch (new_state) {
         case kDeviceStateUnknown:
         case kDeviceStateIdle:
+            trace_first_buffered_audio_ = false;
             // Keep a just-raised network error visible. SetDeviceState(idle)
             // queues STATE_CHANGED after Alert(), and the idle handler would
             // otherwise wipe the status, emotion, and chat message.
@@ -1543,7 +1580,9 @@ void Application::StartListeningAudio() {
     }
     if (buffered_conversation_) {
         buffered_conversation_ = false;
+        buffered_cue_started_ = false;
         buffered_connection_ready_ = false;
+        trace_first_buffered_audio_ = true;
         Board::GetInstance().TraceWakeEvent("listen start / release audio");
         audio_service_.EndMicrophoneBuffer(true);
     } else {

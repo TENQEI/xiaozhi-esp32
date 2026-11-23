@@ -13,7 +13,9 @@ class FlowerCaptureTest(unittest.TestCase):
             "bool AudioService::BeginMicrophoneBuffer(",
             "bool AudioService::MicrophoneBufferOverflowed()",
             "void AudioService::ReleaseMicrophoneAfterCue()",
-            "int64_t AudioService::MicrophoneCueTailRemainingUs()",
+            "bool AudioService::IsMicrophoneBufferReady()",
+            "bool AudioService::IsMicrophoneBufferCapturing()",
+            "void AudioService::RecordMicrophoneBufferFrame(",
             "void AudioService::EndMicrophoneBuffer(",
             "std::unique_ptr<AudioStreamPacket> AudioService::PopPacketFromSendQueue()"))
         start = source.index("if (task.capture_generation != capture_generation_)")
@@ -37,15 +39,19 @@ struct AudioService {
  FixedQueue<int,2> audio_encode_queue_;
  FixedQueue<std::unique_ptr<AudioStreamPacket>,5> audio_send_queue_;
  bool buffering_microphone_=false,draining_microphone_=false,microphone_buffer_overflowed_=false;
+ enum class MicrophoneBufferState {kWarmingUp,kReady,kCapturing};
+ MicrophoneBufferState microphone_buffer_state_=MicrophoneBufferState::kWarmingUp;
  bool discard_cue_input_=false; std::chrono::steady_clock::time_point cue_tail_until_{};
  struct Codec {int output_sample_rate(){return 24000;}} codec_impl;
  Codec* codec_=&codec_impl;
  std::chrono::steady_clock::time_point last_output_time_{};
  uint32_t capture_generation_=0;bool voice=false,initialize=true;
- struct {std::function<void()> on_send_queue_available;} callbacks_;
+ struct {std::function<void()> on_send_queue_available,on_microphone_buffer_progress;} callbacks_;
  void EnableVoiceProcessing(bool enabled){voice=enabled && initialize;}
  bool IsAudioProcessorRunning(){return voice;}
- void ReleaseMicrophoneAfterCue();int64_t MicrophoneCueTailRemainingUs();
+ void ReleaseMicrophoneAfterCue();
+ bool IsMicrophoneBufferReady();bool IsMicrophoneBufferCapturing();
+ void RecordMicrophoneBufferFrame(uint32_t,bool);
  bool BeginMicrophoneBuffer(bool cue=false);bool MicrophoneBufferOverflowed();
  void EndMicrophoneBuffer(bool);std::unique_ptr<AudioStreamPacket> PopPacketFromSendQueue();
  void Encode(int id,uint32_t generation){
@@ -58,22 +64,34 @@ struct AudioService {
         tests=r'''
 int main(){
  AudioService audio;int callbacks=0;audio.callbacks_.on_send_queue_available=[&]{++callbacks;};
+ int progress=0;audio.callbacks_.on_microphone_buffer_progress=[&]{++progress;};
  assert(audio.BeginMicrophoneBuffer(true));auto generation=audio.capture_generation_;
  assert(audio.discard_cue_input_);
- assert(audio.MicrophoneCueTailRemainingUs()==0);
+ assert(!audio.IsMicrophoneBufferReady() && !audio.IsMicrophoneBufferCapturing());
+ audio.RecordMicrophoneBufferFrame(generation-1,true);
+ assert(!audio.IsMicrophoneBufferReady() && progress==0);
+ audio.RecordMicrophoneBufferFrame(generation,true);
+ audio.RecordMicrophoneBufferFrame(generation,true);
+ assert(audio.IsMicrophoneBufferReady() && !audio.IsMicrophoneBufferCapturing() && progress==1);
  audio.last_output_time_=std::chrono::steady_clock::now()+std::chrono::seconds(1);
  audio.ReleaseMicrophoneAfterCue();
  assert(!audio.discard_cue_input_);
  assert(audio.cue_tail_until_-audio.last_output_time_==std::chrono::milliseconds(60));
- assert(audio.MicrophoneCueTailRemainingUs()>0);
+ assert(audio.cue_tail_until_>std::chrono::steady_clock::now());
+ audio.RecordMicrophoneBufferFrame(generation,true); // Frame straddles the tail.
+ assert(!audio.IsMicrophoneBufferCapturing() && progress==1);
  audio.cue_tail_until_=std::chrono::steady_clock::now()-std::chrono::milliseconds(1);
- assert(audio.MicrophoneCueTailRemainingUs()==0);
+ audio.RecordMicrophoneBufferFrame(generation,false);
+ assert(audio.IsMicrophoneBufferCapturing() && progress==2);
  for(int i=1;i<=5;++i)audio.Encode(i,generation);
  assert(!audio.PopPacketFromSendQueue() && !audio.MicrophoneBufferOverflowed());
  audio.Encode(6,generation);assert(audio.MicrophoneBufferOverflowed());
  audio.EnableVoiceProcessing(false);audio.EndMicrophoneBuffer(false);
+ audio.RecordMicrophoneBufferFrame(generation,false);
+ assert(!audio.IsMicrophoneBufferReady() && progress==2);
  audio.Encode(7,generation);assert(!audio.PopPacketFromSendQueue());
  assert(audio.BeginMicrophoneBuffer());generation=audio.capture_generation_;
+ assert(!audio.IsMicrophoneBufferReady());
  audio.Encode(1,generation);audio.Encode(2,generation);audio.Encode(3,generation);
  audio.EndMicrophoneBuffer(true);assert(callbacks==1);
  assert(audio.PopPacketFromSendQueue()->id==1);

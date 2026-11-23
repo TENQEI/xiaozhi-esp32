@@ -60,7 +60,8 @@ int main() {
         source = (ROOT / 'main/application.cc').read_text()
         methods = '\n'.join(definition(source, signature) for signature in (
             'bool Application::PrepareForNetworkSleep()',
-            'bool Application::BeginBufferedConversation()',
+            'bool Application::BeginBufferedConversation(',
+            'void Application::StartBufferedConversationCue()',
             'void Application::ConnectBufferedConversation()',
             'void Application::CancelBufferedConversation()',
             'void Application::FinishBufferedConnection(',
@@ -122,8 +123,12 @@ namespace Lang::Sounds { constexpr auto OGG_EXCLAMATION="error", OGG_POPUP="popu
 struct Audio {int packets=1;
  bool sleep_ready=false;bool PrepareForSleep(){return sleep_ready;}
  bool buffering=false, flushed=false, overflow=false;
- bool cue_muted=false;
- bool BeginMicrophoneBuffer(bool cue){buffering=true;voice=true;cue_muted=cue;return true;}
+ bool cue_muted=false,ready=false,capturing=false;
+ bool BeginMicrophoneBuffer(bool cue){
+  buffering=true;voice=true;cue_muted=cue;ready=false;capturing=false;return true;
+ }
+ bool IsMicrophoneBufferReady(){return buffering && ready;}
+ bool IsMicrophoneBufferCapturing(){return buffering && capturing;}
  void ReleaseMicrophoneAfterCue(){cue_muted=false;}
  bool MicrophoneBufferOverflowed(){return overflow;}
  void EndMicrophoneBuffer(bool send){if(send)assert(listening_command_sent && !cue_muted);buffering=false;flushed=send;}
@@ -162,13 +167,15 @@ struct Board {
 struct Application {
  bool buffered_open_in_progress_=false;
  bool buffered_conversation_=false;
+ bool buffered_cue_started_=false,trace_first_buffered_audio_=false;
  bool buffered_connection_ready_=false,buffered_connection_failed_=false;
  void CompleteBufferedStart();
  void FinishBufferedConnection(std::shared_ptr<Protocol>, bool);
  ListeningMode listening_mode_=kListeningModeAutoStop;
  bool PrepareForNetworkSleep();
  bool CanEnterSleepMode(){return !buffered_open_in_progress_ && state==kDeviceStateIdle && !protocol_->open && audio_service_.idle;}
- bool BeginBufferedConversation();
+ bool BeginBufferedConversation(std::function<void()> start_network={});
+ void StartBufferedConversationCue();
  void ConnectBufferedConversation();
  void CancelBufferedConversation();
  void StartListeningAudio();
@@ -214,6 +221,13 @@ struct Application {
 '''
         tests = r'''
 int main(){
+ const auto start_cue=[](Application& app){
+  app.audio_service_.ready=true;app.StartBufferedConversationCue();
+ };
+ const auto finish_cue=[](Application& app){
+  app.notify_player_.Finish();app.Drain();
+  app.audio_service_.capturing=true;app.CompleteBufferedStart();
+ };
  Application sleep;sleep.state=kDeviceStateIdle;sleep.protocol_->open=false;
  assert(!sleep.PrepareForNetworkSleep() && sleep.protocol_->suspends==0);
  sleep.audio_service_.sleep_ready=true;
@@ -221,31 +235,42 @@ int main(){
  sleep.buffered_open_in_progress_=true;
  assert(!sleep.PrepareForNetworkSleep() && sleep.protocol_->suspends==1);
  Application buffered;buffered.state=kDeviceStateIdle;buffered.protocol_->open=false;
- assert(buffered.BeginBufferedConversation());
+ bool network_started=false;
+ assert(buffered.BeginBufferedConversation([&]{
+  assert(!buffered.audio_service_.buffering);network_started=true;
+ }));
+ assert(network_started);
  assert(buffered.state==kDeviceStateConnecting && buffered.audio_service_.buffering);
- assert(buffered.notify_player_.busy && buffered.audio_service_.cue_muted && !buffered.protocol_->open);
+ buffered.StartBufferedConversationCue();
+ assert(!buffered.notify_player_.busy && buffered.audio_service_.cue_muted && !buffered.protocol_->open);
  buffered.ConnectBufferedConversation();
  assert(buffered.state==kDeviceStateConnecting);run_workers();buffered.Drain();
- assert(buffered.state==kDeviceStateConnecting && !buffered.audio_service_.flushed);
+ assert(buffered.state==kDeviceStateConnecting && !buffered.audio_service_.flushed &&
+        !buffered.notify_player_.busy);
+ start_cue(buffered);
+ buffered.StartBufferedConversationCue();assert(buffered.notify_player_.starts==1);
  buffered.notify_player_.Finish();buffered.Drain();
+ assert(buffered.state==kDeviceStateConnecting && !buffered.audio_service_.flushed);
+ buffered.audio_service_.capturing=true;buffered.CompleteBufferedStart();
  assert(buffered.state==kDeviceStateListening && !buffered.audio_service_.cue_muted);
  buffered.StartListeningAudio();
  assert(buffered.audio_service_.flushed && !buffered.buffered_conversation_);
  // The cue can also finish while Wi-Fi is still connecting.
  Application cue_first;cue_first.state=kDeviceStateIdle;cue_first.protocol_->open=false;
- assert(cue_first.BeginBufferedConversation());cue_first.notify_player_.Finish();cue_first.Drain();
+ assert(cue_first.BeginBufferedConversation());start_cue(cue_first);finish_cue(cue_first);
  assert(cue_first.state==kDeviceStateConnecting && !cue_first.audio_service_.cue_muted);
  assert(cue_first.audio_service_.buffering && !cue_first.audio_service_.flushed);
  cue_first.ConnectBufferedConversation();run_workers();cue_first.Drain();cue_first.StartListeningAudio();
  assert(cue_first.state==kDeviceStateListening && cue_first.audio_service_.flushed);
  Application failed_listen;failed_listen.state=kDeviceStateIdle;failed_listen.protocol_->listen_ok=false;
- assert(failed_listen.BeginBufferedConversation());failed_listen.notify_player_.Finish();failed_listen.Drain();
+ assert(failed_listen.BeginBufferedConversation());start_cue(failed_listen);finish_cue(failed_listen);
  failed_listen.ConnectBufferedConversation();run_workers();failed_listen.Drain();
  failed_listen.StartListeningAudio();
  assert(failed_listen.state==kDeviceStateIdle && !failed_listen.protocol_->open);
  assert(!failed_listen.audio_service_.flushed);
  Application closed_during_cue;closed_during_cue.state=kDeviceStateIdle;
  assert(closed_during_cue.BeginBufferedConversation());
+ start_cue(closed_during_cue);
  closed_during_cue.ConnectBufferedConversation();run_workers();closed_during_cue.Drain();
  closed_during_cue.protocol_->open=false;closed_during_cue.HandleAudioChannelClosed();
  assert(closed_during_cue.notify_player_.busy && closed_during_cue.state==kDeviceStateConnecting);
@@ -256,15 +281,20 @@ int main(){
  assert(!cancelled_buffer.audio_service_.voice && !cancelled_buffer.audio_service_.flushed);
  assert(cancelled_buffer.state==kDeviceStateIdle);
  cancelled_buffer.ConnectBufferedConversation();assert(cancelled_buffer.listening==0);
- Application full;full.state=kDeviceStateIdle;assert(full.BeginBufferedConversation());full.notify_player_.Finish();full.Drain();
+ Application full;full.state=kDeviceStateIdle;assert(full.BeginBufferedConversation());start_cue(full);finish_cue(full);
  full.audio_service_.overflow=true;full.ConnectBufferedConversation();run_workers();full.Drain();
  assert(full.state==kDeviceStateIdle && !full.protocol_->open && !full.audio_service_.flushed);
  Application failed_buffer;failed_buffer.state=kDeviceStateIdle;
  assert(failed_buffer.BeginBufferedConversation());failed_buffer.protocol_->open=false;
+ start_cue(failed_buffer);
  failed_buffer.protocol_->connect=false;failed_buffer.ConnectBufferedConversation();run_workers();failed_buffer.Drain();
  assert(failed_buffer.state==kDeviceStateConnecting && failed_buffer.notify_player_.busy);
  failed_buffer.notify_player_.Finish();failed_buffer.Drain();
  assert(failed_buffer.state==kDeviceStateIdle && !failed_buffer.audio_service_.voice);
+ Application failed_before_cue;failed_before_cue.state=kDeviceStateIdle;
+ assert(failed_before_cue.BeginBufferedConversation());failed_before_cue.protocol_->open=false;
+ failed_before_cue.protocol_->connect=false;failed_before_cue.ConnectBufferedConversation();run_workers();failed_before_cue.Drain();
+ assert(failed_before_cue.state==kDeviceStateIdle && failed_before_cue.notify_player_.starts==0);
  Application canceled_handshake;canceled_handshake.state=kDeviceStateIdle;
  assert(canceled_handshake.BeginBufferedConversation());canceled_handshake.ConnectBufferedConversation();
  canceled_handshake.CancelBufferedConversation();run_workers();canceled_handshake.Drain();
@@ -272,13 +302,15 @@ int main(){
  assert(!canceled_handshake.protocol_->open && !canceled_handshake.buffered_open_in_progress_);
  // The connection can disappear after OpenAudioChannel returns, before completion.
  Application lost_handshake;lost_handshake.state=kDeviceStateIdle;
- assert(lost_handshake.BeginBufferedConversation());lost_handshake.notify_player_.Finish();lost_handshake.Drain();lost_handshake.ConnectBufferedConversation();
+ assert(lost_handshake.BeginBufferedConversation());start_cue(lost_handshake);finish_cue(lost_handshake);
+ lost_handshake.ConnectBufferedConversation();
  run_workers();lost_handshake.protocol_->open=false;lost_handshake.Drain();
  assert(lost_handshake.state==kDeviceStateIdle && !lost_handshake.audio_service_.flushed);
  assert(!lost_handshake.buffered_open_in_progress_);
  // A final encoded frame can fill the buffer after handshake completion.
  Application late_overflow;late_overflow.state=kDeviceStateIdle;
- assert(late_overflow.BeginBufferedConversation());late_overflow.notify_player_.Finish();late_overflow.Drain();late_overflow.ConnectBufferedConversation();
+ assert(late_overflow.BeginBufferedConversation());start_cue(late_overflow);finish_cue(late_overflow);
+ late_overflow.ConnectBufferedConversation();
  run_workers();late_overflow.Drain();late_overflow.audio_service_.overflow=true;
  late_overflow.StartListeningAudio();
  assert(late_overflow.state==kDeviceStateIdle && !late_overflow.audio_service_.flushed);

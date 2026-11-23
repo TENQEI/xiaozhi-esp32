@@ -1,5 +1,7 @@
+#include <esp_event.h>
 #include <esp_log.h>
 #include <esp_pm.h>
+#include <esp_wifi.h>
 #include <sdkconfig.h>
 #include <wifi_manager.h>
 #include <algorithm>
@@ -39,11 +41,17 @@ private:
     bool suppress_d0_gesture_ = false;
 
     static constexpr int64_t kConnectionTimeoutUs = 8LL * 1000000;
+    static constexpr int64_t kCueDelayUs = 0;
     flower::PowerPolicy power_;
     bool offline_ = false;
     bool reconnecting_ = false;
-    bool wifi_start_pending_ = false;
-    esp_timer_handle_t cue_tail_timer_ = nullptr;
+    bool waiting_for_ip_ = false;
+    bool cue_pending_ = false;
+    bool microphone_ready_ = false;
+    int64_t cue_start_at_ = 0;
+    std::atomic<uint32_t> reconnect_generation_{0};
+    esp_event_handler_instance_t link_event_handler_ = nullptr;
+    esp_timer_handle_t cue_timer_ = nullptr;
     bool button_pending_ = false;
     bool config_pending_ = false;
     bool light_sleep_ = false;
@@ -57,6 +65,7 @@ private:
     };
     std::array<WakeEvent, 24> wake_events_{};
     size_t wake_events_written_ = 0;
+    size_t wake_events_printed_ = 0;
 
 #if CONFIG_PM_LIGHT_SLEEP_CALLBACKS && CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
     std::atomic<bool> slept_{false};
@@ -94,11 +103,11 @@ private:
             Application::GetInstance().Schedule([self]() {
                 usb_serial_jtag_ll_phy_disable_pull_override();
                 self->usb_detached_ = false;
-                self->TraceWakeEvent("USB reattach");
                 ESP_ERROR_CHECK(esp_pm_lock_release(self->usb_resume_lock_));
                 // Give the host time to enumerate and reopen the console.
                 esp_timer_stop(self->usb_trace_timer_);
                 ESP_ERROR_CHECK(esp_timer_start_once(self->usb_trace_timer_, 800000));
+                self->TraceWakeEvent("USB reattach");
             });
         };
         timer.arg = this;
@@ -113,16 +122,17 @@ private:
     }
 #endif
 
-    void DumpWakeTrace() const {
+    void DumpWakeTrace() {
         const auto start = wake_events_written_ > wake_events_.size()
                                ? wake_events_written_ - wake_events_.size()
                                : 0;
-        for (auto i = start; i < wake_events_written_; ++i) {
+        for (auto i = std::max(start, wake_events_printed_); i < wake_events_written_; ++i) {
             const auto& entry = wake_events_[i % wake_events_.size()];
             ESP_LOGI("FlowerWake", "%lld ms: %s", static_cast<long long>(entry.time_us / 1000),
                      entry.stage);
             (void)entry;
         }
+        wake_events_printed_ = wake_events_written_;
     }
 
     void SetLightSleep(bool enabled) {
@@ -214,9 +224,59 @@ private:
     }
 
     void StopReconnect() {
+        if (reconnecting_)
+            ++reconnect_generation_;  // Invalidate events already queued for this wake.
         reconnecting_ = false;
-        wifi_start_pending_ = false;
-        esp_timer_stop(cue_tail_timer_);
+        waiting_for_ip_ = false;
+        cue_pending_ = false;
+        esp_timer_stop(cue_timer_);
+    }
+
+    void RegisterLinkEvents() {
+        if (link_event_handler_)
+            return;
+        // The Wi-Fi manager's Connected callback runs at GOT_IP; the cue can play earlier.
+        ESP_ERROR_CHECK(esp_event_handler_instance_register(
+            WIFI_EVENT, ESP_EVENT_ANY_ID,
+            [](void* arg, esp_event_base_t, int32_t event, void*) {
+                auto* self = static_cast<FlowerS3Board*>(arg);
+                if (event != WIFI_EVENT_STA_CONNECTED && event != WIFI_EVENT_STA_DISCONNECTED &&
+                    event != WIFI_EVENT_STA_STOP)
+                    return;
+                const auto generation = self->reconnect_generation_.load();
+                const auto now = esp_timer_get_time();
+                Application::GetInstance().Schedule([self, generation, now, event]() {
+                    if (!self->reconnecting_ || !self->cue_pending_ ||
+                        generation != self->reconnect_generation_.load())
+                        return;
+                    if (event == WIFI_EVENT_STA_CONNECTED) {
+                        self->cue_start_at_ = now + kCueDelayUs;
+                        self->TraceWakeEvent("Wi-Fi link ready");
+                    } else {
+                        self->cue_start_at_ = 0;
+                        esp_timer_stop(self->cue_timer_);
+                    }
+                });
+            },
+            this, &link_event_handler_));
+    }
+
+    void StartReconnect(bool needs_wifi) {
+        reconnecting_ = true;
+        ++reconnect_generation_;
+        waiting_for_ip_ = true;
+        cue_pending_ = true;
+        microphone_ready_ = false;
+        const auto now = esp_timer_get_time();
+        cue_start_at_ = needs_wifi ? 0 : now;
+        connection_deadline_ = now + kConnectionTimeoutUs;
+        if (needs_wifi) {
+            RegisterLinkEvents();
+            offline_ = false;
+            TraceWakeEvent("Wi-Fi start");
+            WifiBoard::SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
+            WifiManager::GetInstance().StartStation();
+        }
     }
 
     void AdvanceReconnect(int64_t now) {
@@ -226,36 +286,35 @@ private:
             StopReconnect();
             return;
         }
-        if (!offline_ && wifi.IsConnected()) {
-            StopReconnect();
+        if (waiting_for_ip_ && wifi.IsConnected()) {
+            waiting_for_ip_ = false;
+            if (!cue_start_at_)  // The link was already up when this wake began.
+                cue_start_at_ = now + kCueDelayUs;
             TraceWakeEvent("Wi-Fi ready");
             app.ConnectBufferedConversation();
-            return;
         }
-        if (now >= connection_deadline_) {
-            TraceWakeEvent(wifi_start_pending_ ? "start cue timeout" : "Wi-Fi timeout");
+        if ((waiting_for_ip_ || cue_pending_) && now >= connection_deadline_) {
+            TraceWakeEvent(waiting_for_ip_ ? "Wi-Fi timeout" : "microphone ready timeout");
             StopReconnect();
             app.CancelBufferedConversation();
             power_.Expire();
             app.PlaySound(Lang::Sounds::OGG_EXCLAMATION);
             return;
         }
-        if (!wifi_start_pending_ || app.IsBufferedConversationCuePending())
-            return;
-
-        // Playback may be drained in software while samples are still queued in I2S DMA.
-        const auto tail_us = app.GetAudioService().MicrophoneCueTailRemainingUs();
-        if (tail_us > 0) {
-            if (!esp_timer_is_active(cue_tail_timer_))
-                ESP_ERROR_CHECK(esp_timer_start_once(cue_tail_timer_, tail_us));
-            return;
+        if (!microphone_ready_ && app.GetAudioService().IsMicrophoneBufferReady()) {
+            microphone_ready_ = true;
+            TraceWakeEvent("microphone ready");
         }
-        wifi_start_pending_ = false;
-        offline_ = false;
-        connection_deadline_ = esp_timer_get_time() + kConnectionTimeoutUs;
-        TraceWakeEvent("Wi-Fi start");
-        WifiBoard::SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
-        wifi.StartStation();
+        if (cue_pending_ && microphone_ready_ && cue_start_at_) {
+            if (now >= cue_start_at_) {
+                cue_pending_ = false;
+                app.StartBufferedConversationCue();
+            } else if (!esp_timer_is_active(cue_timer_)) {
+                ESP_ERROR_CHECK(esp_timer_start_once(cue_timer_, cue_start_at_ - now));
+            }
+        }
+        if (!waiting_for_ip_ && !cue_pending_)
+            StopReconnect();
     }
 
     void HandleButton() {
@@ -285,14 +344,16 @@ private:
             return;
         }
         TraceWakeEvent("single click / offline conversation");
-        if (!app.BeginBufferedConversation()) {
-            button_pending_ = true;
-            return;
+        if (!app.BeginBufferedConversation([this, needs_wifi]() { StartReconnect(needs_wifi); })) {
+            if (reconnecting_) {
+                TraceWakeEvent("microphone warmup failed");
+                StopReconnect();
+                power_.Expire();
+                app.PlaySound(Lang::Sounds::OGG_EXCLAMATION);
+            } else {
+                button_pending_ = true;
+            }
         }
-        button_pending_ = false;
-        reconnecting_ = true;
-        wifi_start_pending_ = needs_wifi;
-        connection_deadline_ = esp_timer_get_time() + kConnectionTimeoutUs;
     }
 
     void InitializeTools() {
@@ -391,15 +452,20 @@ public:
         };
         timer.name = "flower_countdown";
         ESP_ERROR_CHECK(esp_timer_create(&timer, &countdown_wake_));
-        // Wake the main loop so OnApplicationEvent() can start Wi-Fi after the DMA tail.
+        // The default cue guard is zero; a nonzero guard uses this timer without blocking.
         timer.callback = [](void*) { Application::GetInstance().Schedule([]() {}); };
-        timer.name = "flower_cue_tail";
-        ESP_ERROR_CHECK(esp_timer_create(&timer, &cue_tail_timer_));
+        timer.name = "flower_cue";
+        ESP_ERROR_CHECK(esp_timer_create(&timer, &cue_timer_));
         InitializeTools();
     }
 
     void TraceWakeEvent(const char* stage) override {
         wake_events_[wake_events_written_++ % wake_events_.size()] = {esp_timer_get_time(), stage};
+#if CONFIG_PM_LIGHT_SLEEP_CALLBACKS && CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+        if (slept_.load() || usb_detached_ || esp_timer_is_active(usb_trace_timer_))
+            return;
+#endif
+        DumpWakeTrace();
     }
 
     bool UsesWakeWord() const override { return false; }
